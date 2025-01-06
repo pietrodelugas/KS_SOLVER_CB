@@ -589,7 +589,7 @@ add_subdirectory(DEVMEMLIB)
 #add_subdirectory(Modules)
 add_subdirectory(LAXlib)
 add_subdirectory(KS_Solvers)
-#add_subdirectory(PW)
+add_subdirectory(cbToy)
 
 ###########################################################
 # Pkg-config
