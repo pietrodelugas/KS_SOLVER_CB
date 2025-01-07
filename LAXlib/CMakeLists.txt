@@ -22,7 +22,7 @@ target_link_libraries(qe_lax
         qe_openmp_fortran
         qe_mpi_fortran
         qe_utilx
-        qe_devxlib)
+        qe_devmem)
 if(QE_ENABLE_CUDA)
     if(CMAKE_Fortran_COMPILER_ID MATCHES "PGI" OR CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
         set(CMAKE_REQUIRED_LINK_OPTIONS "${CUDA_FLAG}lib=cusolver;-fortranlibs")
