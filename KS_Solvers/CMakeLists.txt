@@ -16,8 +16,9 @@ set(src_davidson
     Davidson/cegterg.f90
     Davidson/regterg.f90
     # GPU
-    Davidson/regterg_gpu.f90
-    Davidson/cegterg_gpu.f90)
+    #Davidson/regterg_gpu.f90
+    #Davidson/cegterg_gpu.f90
+    )
 qe_enable_cuda_fortran("${src_davidson}")
 
 set(src_dense
