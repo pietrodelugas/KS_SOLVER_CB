@@ -16,6 +16,7 @@ set(src_cb
   sort.f90
   write_bands.f90 
 )
+qe_enable_cuda_fortran("${src_cb}")
 qe_add_library(cb_lib ${src_cb}) 
 qe_install_targets(cb_lib)
 target_link_libraries(cb_lib
