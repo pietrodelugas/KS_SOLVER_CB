@@ -8,7 +8,9 @@ program cb_davidson_main
    use mp_bands,             ONLY : intra_bgrp_comm, inter_bgrp_comm
 #endif
    use mytime,               only: t0cpu, clock_label, nclock, clock_thread              
+#if defined(__OPENMP)
    use omp_lib,               only: omp_get_thread_num
+#endif
    !!use nvpl_lapack,         only: nvpl_lapack_set_num_threads
    implicit none
    !
@@ -81,7 +83,11 @@ program cb_davidson_main
      do i_batch = 1, min(nk_batches, nks - ik +1) 
        !clock thread is declared threadprivate in the module 
        clock_thread = i_batch  
+#if defined(__OPENMP) 
        print '("First loop, batch ",3I5)', i_batch, clock_thread, omp_get_thread_num()  
+#else
+       print '("First loop, batch ",2I5)', i_batch, clock_thread
+#endif
        current_k = ik + i_batch -1   
 
        call init_k(current_k, i_batch) 
