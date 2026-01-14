@@ -42,6 +42,14 @@ target_link_libraries(qe_utilx
     PRIVATE
         qe_openmp_fortran)
 
+if (QE_ENABLE_PROFILE_RAVE)
+	target_link_libraries( qe_utilx
+		PUBLIC
+		f_raveinterface) 
+endif() 
+
+
+
 qe_install_targets(qe_utilx qe_utilx_c)
 
 # Feature checks

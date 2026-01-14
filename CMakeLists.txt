@@ -110,6 +110,10 @@ option(QE_CLOCK_SECONDS
 set(QE_FFTW_VENDOR "AUTO" CACHE
     STRING "select a specific FFTW library [Intel_DFTI, Intel_FFTW3, ArmPL, IBMESSL, FFTW3, Internal]")
 set(QE_ENABLE_SANITIZER "none" CACHE STRING "none,asan,ubsan,tsan,msan")
+option(QE_ENABLE_PROFILE_RAVE
+	"enable execution of RAVE profiler plugin" OFF)
+
+
 set(QE_ENABLE_PLUGINS "" CACHE STRING "Semicolon-separated list of plugins")
 set (QE_EXTRA_DEFINITIONS "" CACHE STRING "Semicolon-separated list of extra global definitions")
 
@@ -584,10 +588,19 @@ if(QE_ENABLE_PROFILE_NVTX)
         CUDA::nvToolsExt)
 endif(QE_ENABLE_PROFILE_NVTX)
 
+if (QE_ENABLE_PROFILE_RAVE)
+	qe_add_global_compile_definitions(__PROFILE_RAVE) 
+endif()
+
+
+
 ###########################################################
 # Components
 ###########################################################
 #add_subdirectory(external)
+if(QE_ENABLE_PROFILE_RAVE)
+	add_subdirectory(RAVE_interfaces)
+endif() 
 add_subdirectory(FFTXlib)
 add_subdirectory(UtilXlib)
 add_subdirectory(DEVMEMLIB) 

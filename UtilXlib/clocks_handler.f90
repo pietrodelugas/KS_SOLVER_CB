@@ -190,6 +190,9 @@ SUBROUTINE start_clock( label )
   USE omp_lib,only: omp_set_lock, omp_unset_lock, omp_get_thread_num
   USE mytime, only: clock_locker
 #endif
+#if defined(__PROFILE_RAVE) 
+  USE rave_user_events 
+#endif
   USE nvtx
   !
   IMPLICIT NONE
@@ -236,7 +239,13 @@ SUBROUTINE start_clock( label )
            t0cpu(clock_thread, n) = f_tcpu()
            t0wall(clock_thread, n)= f_wall()
 
+#if defined(__CUDA) && defined(__PROFILE_NVTX)
            call nvtxStartRange(label_, n)
+#elif defined(__OPENMP_GPU) && defined(__PROFILE_ROCTX)
+           call roctxStartRange(label_)
+#elif defined(__RISCV) && defined(__PROFILE_RAVE)
+           call rave_begin_region(label_)
+#endif
         ENDIF
         !
 #if defined(_OPENMP) 
@@ -261,7 +270,13 @@ SUBROUTINE start_clock( label )
      clock_label(nclock) = label_
      t0cpu(clock_thread, nclock)       = f_tcpu()
      t0wall(clock_thread, nclock)      = f_wall()
+#if defined(__CUDA) && defined(__PROFILE_NVTX)
      call nvtxStartRange(label_, n)
+#elif defined(__OPENMP_GPU) && defined(__PROFILE_ROCTX)
+     CALL roctxStartRange(label_)
+#elif defined(__RISCV) && defined(__PROFILE_RAVE)
+     call rave_begin_region(label_)
+#endif
      !
   ENDIF
   !
@@ -371,6 +386,15 @@ SUBROUTINE stop_clock( label )
   USE omp_lib, only: omp_get_thread_num, omp_set_lock, omp_unset_lock, omp_in_parallel
   USE mytime, only: clock_locker
 #endif
+
+#if defined(__CUDA) && defined(__PROFILE_NVTX)
+  USE nvtx
+#elif defined(__OPENMP_GPU) && defined(__PROFILE_ROCTX)
+  USE roctx, ONLY : roctxEndRange
+#elif defined(__RISCV) && defined(__PROFILE_RAVE)
+  USE rave_user_events, only: rave_end_region
+#endif
+
  
   !
   IMPLICIT NONE
@@ -421,7 +445,14 @@ SUBROUTINE stop_clock( label )
            called(n)    = called(n) + 1
            t0cpu(clock_thread, n)     = notrunning
            t0wall(clock_thread, n)    = notrunning
+#if defined(__CUDA) && defined(__PROFILE_NVTX)
            call nvtxEndRange
+#elif defined(__OPENMP_GPU) && defined(__PROFILE_ROCTX)
+           call roctxEndRange
+#elif defined(__RISCV) && defined(__PROFILE_RAVE)
+           call rave_end_region(label_)
+#endif
+
            !
         ENDIF
         !
@@ -588,18 +619,19 @@ FUNCTION get_cpu_and_wall( n) result (t)
   !
   USE util_param, ONLY : DP 
   USE mytime,     ONLY : clock_label, cputime, walltime, mpi_per_thread, &
-                         notrunning, called, t0cpu, t0wall, f_wall, f_tcpu
+                         notrunning, called, t0cpu, t0wall, f_wall, f_tcpu, &
+                         clock_thread
   IMPLICIT NONE 
   ! 
   INTEGER  :: n 
   REAL(DP) :: t(2)  
   !
-  IF (t0cpu(n) == notrunning ) THEN 
+  IF (t0cpu(clock_thread, n) == notrunning ) THEN 
      t(1) = cputime(n)
      t(2)  = walltime(n)
    ELSE 
-     t(1)   = cputime(n) + f_tcpu() - t0cpu(n)
-     t(2)   = walltime(n)+ f_wall() - t0wall(n)
+     t(1)   = cputime(n) + f_tcpu() - t0cpu(clock_thread, n)
+     t(2)   = walltime(n)+ f_wall() - t0wall(clock_thread,n)
    END IF 
 #if defined(PRINT_AVG_CPU_TIME_PER_THREAD)
   ! rescale the elapsed cpu time on a per-thread basis
@@ -612,7 +644,8 @@ SUBROUTINE print_this_clock( n )
   !
   USE util_param, ONLY : DP, stdout
   USE mytime,     ONLY : clock_label, cputime, walltime, mpi_per_thread, &
-                         notrunning, called, t0cpu, t0wall, f_wall, f_tcpu
+                         notrunning, called, t0cpu, t0wall, f_wall, f_tcpu, &
+                         clock_thread
   !
   IMPLICIT NONE
   !
@@ -736,7 +769,7 @@ SUBROUTINE print_this_clock( n )
      ENDIF
 #endif
      !
-  ELSEIF ( nmax == 1 .or. t0cpu(n) /= notrunning ) THEN
+  ELSEIF ( nmax == 1 .or. t0cpu(clock_thread, n) /= notrunning ) THEN
      !
      ! ... for clocks that have been called only once
      !
@@ -827,7 +860,8 @@ FUNCTION get_clock( label )
   !
   USE util_param, ONLY : DP
   USE mytime,     ONLY : no, nclock, clock_label, walltime, &
-                         notrunning, t0wall, t0cpu, f_wall
+                         notrunning, t0wall, t0cpu, f_wall, &
+                         clock_thread
   !
   IMPLICIT NONE
   !
@@ -856,13 +890,13 @@ FUNCTION get_clock( label )
      !
      IF ( label == clock_label(n) ) THEN
         !
-        IF ( t0cpu(n) == notrunning ) THEN
+        IF ( t0cpu(clock_thread, n) == notrunning ) THEN
            !
            get_clock = walltime(n)
            !
         ELSE
            !
-           get_clock = walltime(n) + f_wall() - t0wall(n)
+           get_clock = walltime(n) + f_wall() - t0wall(clock_thread, n)
            !
         ENDIF
         !
