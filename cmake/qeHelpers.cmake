@@ -95,6 +95,18 @@ function(_qe_add_cuda_link_flags TGT)
     endif()
 endfunction(_qe_add_cuda_link_flags)
 
+function(qe_add_riscv_flags SRCS)
+	if(CMAKE_Fortran_COMPILER_ID MATCHES "LLVMFlang")
+	  foreach(src IN LISTS SRCS)
+            set_source_files_properties(${src}
+                PROPERTIES
+		COMPILE_OPTIONS "${QE_EPI_COMPILE_OPTIONS}")
+	        message (STATUS "${src}")
+          endforeach()
+        endif()
+endfunction(qe_add_riscv_flags)
+
+
 function(qe_git_submodule_update PATH)
     # validate submodule_commit_hash_records against git database
     get_filename_component(SUBMODULE_NAME ${PATH} NAME)

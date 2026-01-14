@@ -270,6 +270,8 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
     include(IntelFortranCompiler)
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "XL")
     include(IBMFortranCompiler)
+elseif(CMAKE_Fortran_COMPILER_ID MATCHES "LLVMFlang")
+    include(RiscvEpiFlags)
 endif()
 
 if(QE_ENABLE_STATIC_BUILD)
