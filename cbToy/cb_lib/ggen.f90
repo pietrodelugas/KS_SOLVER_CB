@@ -14,7 +14,7 @@
   USE fft_types, only : fft_type_init
   USE fft_ggen, only : fft_set_nl
 #if defined(__MPI)
-  use mp_bands,             ONLY : intra_bgrp_comm,nyfft
+  use mp_bands,             ONLY : intra_bgrp_comm,nyfft, nproc_bgrp
 #endif
   implicit none
 ! input variables
@@ -65,6 +65,7 @@
 ! number of y-fft groups. By default =1, i.e. y-ffts are done by a single proc
 #if defined(__MPI)
   nyfft_dummy=nyfft
+  lpara = (nproc_bgrp > 1) 
 #else
   nyfft_dummy=1
 #endif
