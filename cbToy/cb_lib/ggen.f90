@@ -70,7 +70,7 @@
   nyfft_dummy=1
 #endif
 
-
+  call start_clock('ggen') 
 !emine
 !set the data structure for the fft arrays
   CALL fft_type_init( dfft, smap, "wave", gamma_only, lpara, intra_bgrp_comm, at, bg, gkcut, gcutrho/gkcut , & 
@@ -160,4 +160,5 @@
   allocate ( igk_batched(npwx, nk_batches), ekin_batched(npwx,nk_batches), aux(npwx) )
   allocate (igk(npwx), ekin(npwx)) 
   !$acc enter data copyin(dfft, dfft%nl,dfft%nnr, igk_batched) 
+  call stop_clock('ggen') 
  end subroutine ggen
