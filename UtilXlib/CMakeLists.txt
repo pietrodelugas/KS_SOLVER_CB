@@ -17,6 +17,7 @@ set(src_util
     clib_wrappers.f90
     export_gstart_2_solvers.f90
     set_mpi_comm_4_solvers.f90
+    f_rusage_print.f90
     # GPU
     mp_base_gpu.f90)
 qe_enable_cuda_fortran("${src_util}")
@@ -32,7 +33,8 @@ set(src_util_c
     md5_from_file.c
     memstat.c
     memusage.c
-    ptrace.c)
+    ptrace.c
+    rusage_print.c)
 add_library(qe_utilx_c ${src_util_c})
 target_link_libraries(qe_utilx
     PUBLIC

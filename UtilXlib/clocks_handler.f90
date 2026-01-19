@@ -219,6 +219,8 @@ SUBROUTINE start_clock( label )
   else 
      clock_thread = 1
   end if
+#else 
+  clock_thread=1
 #endif
   !
   ! ... prevent trouble if label is longer than 12 characters

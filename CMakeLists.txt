@@ -112,7 +112,8 @@ set(QE_FFTW_VENDOR "AUTO" CACHE
 set(QE_ENABLE_SANITIZER "none" CACHE STRING "none,asan,ubsan,tsan,msan")
 option(QE_ENABLE_PROFILE_RAVE
 	"enable execution of RAVE profiler plugin" OFF)
-
+option(QE_ENABLE_PAPI
+	"enable PAPI linking and calls" OFF) 
 
 set(QE_ENABLE_PLUGINS "" CACHE STRING "Semicolon-separated list of plugins")
 set (QE_EXTRA_DEFINITIONS "" CACHE STRING "Semicolon-separated list of extra global definitions")
@@ -591,7 +592,21 @@ endif(QE_ENABLE_PROFILE_NVTX)
 if (QE_ENABLE_PROFILE_RAVE)
 	qe_add_global_compile_definitions(__PROFILE_RAVE) 
 endif()
-
+if (QE_ENABLE_PAPI)
+	set(PAPI_ROOT "" CACHE PATH "Root directory of papi library")
+	add_library(papi SHARED IMPORTED)
+	set_target_properties(papi PROPERTIES
+		IMPORTED_LOCATION "${PAPI_ROOT}/lib/libpapi.so"
+		)
+	target_include_directories(papi
+		INTERFACE
+		"${PAPI_ROOT}/include"
+		)
+	target_compile_definitions(papi
+		INTERFACE
+		__PAPI=1
+		)
+endif() 	
 
 
 ###########################################################
