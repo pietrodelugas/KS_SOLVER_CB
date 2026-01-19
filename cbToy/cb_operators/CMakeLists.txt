@@ -7,6 +7,12 @@ set(src_cbops
    my_h_psi_batched.f90
    cb_s_psi_batched.f90 
    cb_g_psi_batched.f90)
+### RISCV ###
+message("-- Setting vectorization for cb_ops")
+qe_add_riscv_flags("${cp_ops}")
+#############
+
+
 qe_add_library(cb_ops ${src_cbops}) 
 qe_install_targets(cb_ops)
 target_link_libraries(cb_ops

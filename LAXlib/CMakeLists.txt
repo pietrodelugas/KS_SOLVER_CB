@@ -13,6 +13,14 @@ set(src_lax
     cdiaghg.f90)
 qe_enable_cuda_fortran("${src_lax}")
 
+### RISCV ###
+message("-- Setting vectorization for LAXlib")
+qe_add_riscv_flags("${src_lax}")
+#############
+
+
+
+
 qe_add_library(qe_lax ${src_lax})
 target_link_libraries(qe_lax
     PRIVATE

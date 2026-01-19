@@ -17,6 +17,12 @@ set(src_cb
   write_bands.f90 
 )
 qe_enable_cuda_fortran("${src_cb}")
+### RISCV ###
+message("-- Setting vectorization for cb_lib")
+qe_add_riscv_flags("${src_cb}")
+#############
+
+
 qe_add_library(cb_lib ${src_cb}) 
 qe_install_targets(cb_lib)
 target_link_libraries(cb_lib

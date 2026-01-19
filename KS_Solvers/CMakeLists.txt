@@ -20,6 +20,12 @@ set(src_davidson
     #Davidson/cegterg_gpu.f90
     )
 qe_enable_cuda_fortran("${src_davidson}")
+### RISCV ###
+message("-- Setting vectorization for Davidson")
+qe_add_riscv_flags("${src_davidson}")
+#############
+
+
 
 set(src_dense
     DENSE/rotate_HSpsi_gamma.f90
@@ -38,6 +44,13 @@ set(src_dense
     DENSE/rotate_wfc_k_gpu.f90
     DENSE/rotate_driver_cuf.f90)
 qe_enable_cuda_fortran("${src_dense}")
+
+### RISCV ###
+message("-- Setting vectorization for dense")
+qe_add_riscv_flags("${src_dense}")
+#############
+
+
 
 qe_add_library(qe_kssolver_davidson ${src_davidson})
 target_link_libraries(qe_kssolver_davidson

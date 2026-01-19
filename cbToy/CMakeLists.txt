@@ -14,7 +14,11 @@ target_link_libraries(cb_davidson
         qe_lax
 	qe_openacc_fortran
 	qe_openmp_fortran) 
-
+if (QE_ENABLE_PAPI)
+	target_link_libraries(cb_davidson
+		PRIVATE
+		papi)
+endif()
 
 set(src_checker
 	my_h_psi_checker.f90)
