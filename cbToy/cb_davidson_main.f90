@@ -25,7 +25,7 @@ program cb_davidson_main
    real(dp), allocatable :: eig(:), eig_batched(:,:) 
    integer, parameter :: npol=1
    integer :: dummy
-   integer :: notcnv, dav_iter, nhpsi
+   integer :: notcnv, dav_iter, nhpsi, n_k !! M.Iovine - added variable for storing the n. of elem. of the single batch
    integer, allocatable :: notcnv_batched(:), dav_iter_batched(:), nhpsi_batched(:)
    logical :: overlap = .false. , lrot =.false.
 ! additional local variables
@@ -95,6 +95,8 @@ program cb_davidson_main
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
 
    do ik =1,nks, nk_batches
+     !! M.Iovine - we assign a value to the variable n_k:
+     n_k = min(nk_batches, nks - ik +1)
      call start_clock('davidson')
      !$omp parallel num_threads(nk_batches) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label) 
      !$omp do
@@ -121,7 +123,7 @@ program cb_davidson_main
        call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), & 
-                      nhpsi_batched(i_batch), i_batch )
+                      nhpsi_batched(i_batch), i_batch, n_k ) !!M.Iovine - added n_k as argument of the subroutine
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)

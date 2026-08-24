@@ -47,6 +47,17 @@ SUBROUTINE laxlib_cdiaghg_gpu( n, m, h, s, ldh, e, v, me_bgrp, root_bgrp, intra_
   COMPLEX(DP), DEVICE, INTENT(OUT) :: v(ldh,m)
   INTEGER, INTENT(IN) :: me_bgrp, root_bgrp, intra_bgrp_comm
 END SUBROUTINE
+
+SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h, s, ldh, e, v, n_k, me_bgrp, root_bgrp, intra_bgrp_comm )
+  IMPLICIT NONE
+  include 'laxlib_kinds.fh'
+  INTEGER, INTENT(IN) :: n, m, ldh, n_k
+  COMPLEX(DP), DEVICE, INTENT(INOUT) :: h(ldh,n,n_k), s(ldh,n,n_k)
+  REAL(DP), DEVICE, INTENT(OUT) :: e(n,n_k)
+  COMPLEX(DP), DEVICE, INTENT(OUT) :: v(ldh,m,n_k)
+  INTEGER, INTENT(IN) :: me_bgrp, root_bgrp, intra_bgrp_comm
+END SUBROUTINE
+
 #endif
 END INTERFACE
 !----------------------------------------------------------------------------
