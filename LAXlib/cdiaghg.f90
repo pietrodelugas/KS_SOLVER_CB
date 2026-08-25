@@ -582,8 +582,9 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
 
 #endif
   INTEGER :: i, j, k !!!! M.IOvine - added index k for the third dimension of the arrays
+  mycudaStream = laxlib_cuda_stream
   istat_cublas = cublasCreate(cublas_handle) !!! M.Iovine - introduced cublas handle
-  istat_cublas = cublasSetStream(cublas_handle, laxlib_cuda_stream) !!!M.IOvine - COMMENTED TO DEBUGG!!
+  istat_cublas = cublasSetStream(cublas_handle, mycudaStream) !!!M.IOvine - COMMENTED TO DEBUGG!!
   IF (istat_cublas /= 0) CALL lax_error__( ' cdiaghg_gpu ', 'cublasSetStream', ABS(istat_cublas) ) 
 #undef VARTYPE
 
@@ -654,16 +655,16 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
       IF (omp_get_num_threads() > 1) CALL lax_error__( ' cdiaghg_gpu ', 'cdiaghg_gpu is not thread-safe',  ABS( info ) )
 #endif
       !IF ( .NOT. cusolver_initialized(cusolver_thread) ) THEN
-       !  info = cusolverDnCreate(cusolver_handle(cusolver_thread))
+       ! info = cusolverDnCreate(cusolver_handle(cusolver_thread))
         !IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnCreate',  ABS( info ) )
-       ! cusolver_initialized(cusolver_thread) = .TRUE.
+        !cusolver_initialized(cusolver_thread) = .TRUE.
         !info = cusolverDnSetStream(cusolver_handle(cusolver_thread), laxlib_cuda_stream )
         !IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnSetStream',  ABS( info ) )   
       !ENDIF
       IF( .NOT. cuSolverInitialized ) THEN   !!! M.Iovine - we introduce a new Handle to avoid leaving changes to the next calls done
                                                     !through the kernel calls inside the iterative loop!!
         info = cusolverDnCreate(cuSolverHandle_batched)
-         IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnCreate',  ABS( info ) )
+        IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnCreate',  ABS( info ) )
          cuSolverInitialized = .TRUE.
          info = cusolverDnSetStream(cuSolverHandle_batched, laxlib_cuda_stream) 
          IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnSetStream',  ABS( info ) )
@@ -679,13 +680,23 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
     !!! M.Iovine - we copy the c_devptr in the host array arr_of_ptr_s to the device array arr_of_ptr_s_d
     arr_of_ptr_s_d = arr_of_ptr_s
     
+    
+    !!!DEBUGG :
+    istat_cublas = cudaGetLastError()
+IF (istat_cublas /= 0) THEN
+   print *, 'STICKY CUDA ERROR before ZpotrfBatched: ', &
+             cudaGetErrorString(istat_cublas)
+END IF
+    !!!!
+
+     
     !cuSolverHandle = cusolver_handle(cusolver_thread) !!M.Iovine - this line must before any cuSolver routine kernel call!
     info = cusolverDnZpotrfBatched(cuSolverHandle_batched, CUBLAS_FILL_MODE_LOWER, n, arr_of_ptr_s_d, ldh, d_info(1), n_k)
     IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnZpotrfBatched',  ABS( info ) )
     !!!!
     
     !!!M.Iovine - Cholesky check:
-    info = cudaStreamSynchronize(laxlib_cuda_stream)
+    info = cudaDeviceSynchronize()
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after Cholesky', ABS(info))
     
     IF (.NOT. ALLOCATED(dinfo_host)) ALLOCATE(dinfo_host(n_k))
@@ -723,7 +734,7 @@ print *, '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-LEFT',  ABS( info ) )
 
-    info = cudaStreamSynchronize(laxlib_cuda_stream) !!M.Iovine - added a synchronize
+    info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang left', ABS(info))
 
 !!! DEBUGGING LINES
@@ -747,7 +758,7 @@ print *, '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-RIGT',  ABS( info ) )
       !
     
-    info = cudaStreamSynchronize(laxlib_cuda_stream) !!M.Iovine - added a synchronize
+    info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang right', ABS(info))
 
 !!! DEBUGGING LINES:
@@ -808,9 +819,10 @@ print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
       n, h_d, ldh, e_d, work_d, lwork_d, d_info(1), syevj_params, n_k)
       IF( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', ' cusolverDnZheevjBatched failed ', ABS( info ) )
      
-     info = cudaStreamSynchronize(laxlib_cuda_stream) !!M.Iovine - added a synchronize
+     info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after batched diag.', ABS(info))
-
+    dinfo_host = d_info(1:n_k)
+    print *, '[DIAG CUSOLVER CHECK NEW d_info] per-batch status =', dinfo_host
 
      !!! DEBUGGING LINES: 
 IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
@@ -828,6 +840,15 @@ print *, '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 
       !! M.Iovine - we destroy the SyevjInfo object:
       info = cusolverDnDestroySyevjInfo(syevj_params)
+    !!! LAST PART ADDED FOR DEBUGGING:
+    do k = 1, n_k
+        arr_of_ptr_h(k) = c_devloc(h_d(:,:,k))
+    end do
+
+    do k = 1, n_k
+        arr_of_ptr_s(k) = c_devloc(s_d(:,:,k))
+    end do
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
     !!!! M.Iovine : we need to take into account the fact that the eigenvalues got after the factorization and the triangular matrix mult. are the same of the initial problem, but this is not true for the eigenvectors, so we need to solve a triangular system to get the effective eigenvectors:
     !! M.Iovine : it is important to observe that the current eigenvectors are stored in the h_d matrix: h_d = L(conj. transpose) * eigvect
@@ -836,7 +857,7 @@ print *, '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-eigenvectors',  ABS( info ) )
    
-   info = cudaStreamSynchronize(laxlib_cuda_stream) !!M.Iovine - added a synchronize
+   info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang final', ABS(info))
 
    !!! DEBUGGING LINES:   
@@ -853,7 +874,7 @@ print *, '[6] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 IF (.NOT. ALLOCATED(nan_echk)) ALLOCATE(nan_echk(n), nan_emask(n))
-info = cudaStreamSynchronize(laxlib_cuda_stream)
+info = cudaDeviceSynchronize()
 IF (info /= 0) CALL lax_error__('cdiaghg_gpu', &
                                  'sync before reading e_d', ABS(info))
 nan_echk = e_d(1:n,1)
@@ -919,11 +940,16 @@ DO k = 1, n_k
    END DO
 END DO
 
+
+info = cudaDeviceSynchronize()
+ IF (info /= 0) CALL lax_error__('cdiaghg_gpu', &
+                                 'sync before reading e_d', ABS(info))
+
 !
       !
       ! Do not destroy the handle to save the (re)creation time on each call.
       !
-      !info = cusolverDnDestroy(cuSolverHandle)
+      !info = cusolverDnDestroy(cuSolverHandle_batched)
       !IF( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', ' cusolverDnDestroy_batched failed ', ABS( info ) )
       !
 
@@ -955,11 +981,11 @@ print *, '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
       CALL dev%release_buffer( h_bkp_d, info )
       CALL dev%release_buffer( s_bkp_d, info )
 #endif
-      IF (ALLOCATED(h_sym_chk)) DEALLOCATE(h_sym_chk) !!M.IOvine - debugging lines
+!      IF (ALLOCATED(h_sym_chk)) DEALLOCATE(h_sym_chk) !!M.IOvine - debugging lines
 !! We destroy the cublas handle:
-#if defined(__CUDA)
-    istat_cublas = cublasDestroy(cublas_handle)
-#endif
+!#if defined(__CUDA)
+ !   istat_cublas = cublasDestroy(cublas_handle)
+!#endif
 
       !
       ! Keeping compatibility for both CUSolver and CustomEigensolver, CustomEigensolver below
@@ -967,6 +993,16 @@ print *, '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 #else
      CALL lax_error__( 'cdiaghg', 'Called GPU eigensolver without GPU support', 1 )
 #endif
+
+!! We destroy the cublas handle:
+#if defined(__CUDA)
+    istat_cublas = cublasDestroy(cublas_handle)
+#endif
+
+info = cudaDeviceSynchronize()
+ IF (info /= 0) CALL lax_error__('cdiaghg_gpu', &
+                                 'sync before reading e_d', ABS(info))
+
      !
   END IF
   !
