@@ -110,8 +110,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   !$acc declare device_resident(hc_batched_old, sc_batched_old )
   REAL(DP), ALLOCATABLE :: ew_batched(:,:) !! M.Iovine - eigenvalues of the reduced Hamiltonian considered for batch on k-points directly on the device
   !$acc declare device_resident(ew_batched)
-  REAL(DP), ALLOCATABLE, DEVICE :: ew_comp(:,:) !! M.Iovine - eigenvalues of the reduced Hamiltonian
-  !$acc declare device_resident(ew_comp)
+  REAL(DP), ALLOCATABLE :: ew_comp(:,:) !! M.Iovine - eigenvalues of the reduced Hamiltonian
+  !!$acc declare device_resident(ew_comp)
   REAL(DP), ALLOCATABLE :: ew_full_check(:) !! Added for debugging!!
   LOGICAL, ALLOCATABLE :: ew_full_nan(:), ew_full_inf(:) !! Added for debugging!!
   COMPLEX(DP), ALLOCATABLE :: vc_full_check(:,:,:) !! Added for debugging!!
@@ -258,7 +258,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate vc ', ABS(ierr) )
   ALLOCATE( ew( nvecx ), STAT=ierr )
-  !$acc enter data create(ew) async(async_id) 
+  !$acc enter data create(ew) async(async_id)
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate ew ', ABS(ierr) )
   ALLOCATE( conv( nvec ), STAT=ierr )
@@ -288,8 +288,10 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   ALLOCATE(Sv_chk(nbase))
   ALLOCATE(Hv_chk(nbase))
   ALLOCATE(res_chk(nbase))
+  ALLOCATE(ew_comp(nbase, nbase)) !!M.Iovine - allocation of ew_comp!!
+  !$acc enter data create(ew_comp) async(async_id) !!M.Iovine - allocation of ew_comp!!
   !!
-  
+
   !
   !$acc host_data use_device(evc, psi)
   CALL dev_memcpy_async(psi, evc, mycudaStream, (/ 1 , npwx*npol /), 1, &
@@ -395,17 +397,15 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !
      !!$acc host_data use_device(hc, sc, vc, ew, hc_batched, sc_batched, vc_batched, ew_batched)
      !CALL start_clock( 'cegterg:diag' )
-     !$acc wait(async_id) !! M.Iovine - we add a wait before the assignment to the 3d arrays
+     !!$acc wait(async_id) !! M.Iovine - we add a wait before the assignment to the 3d arrays
      !call omp_set_lock(cegterg_locker) !!!! M.Iovine - We comment the line
      !!!! M.IOvine - Changes for 3D arrays: 
      nbase_batched(i_batch) = nbase !!!M.Iovine : we store the dimension for the current thread
-     !$omp barrier
+     !!$omp barrier
      !!! M.Iovine : we find the maximum for nbase_batched and nvecx_batched :
      nbase_max = maxval(nbase_batched)
      
-     
-
-     !$acc parallel loop collapse(2) present(hc, sc, hc_batched, sc_batched, vc_batched)
+     !!$acc parallel loop collapse(2) present(hc, sc, hc_batched, sc_batched, vc_batched)
      do i = 1, nvecx
         do j = 1, nvecx
                 hc_batched(j,i,i_batch) = CMPLX(hc(j,i), kind=DP)
@@ -445,8 +445,15 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      IF (.NOT. ALLOCATED(hc_comp)) ALLOCATE(hc_comp(nbase_max,nbase_max,n_k))
      IF (.NOT. ALLOCATED(sc_comp)) ALLOCATE(sc_comp(nbase_max,nbase_max,n_k))
      IF (.NOT. ALLOCATED(vc_comp)) ALLOCATE(vc_comp(nbase_max,nbase_max,n_k))
-     IF (.NOT. ALLOCATED(ew_comp)) ALLOCATE(ew_comp(nbase_max,n_k))
-     !!$acc enter data create(hc_comp, sc_comp, vc_comp, ew_comp)
+     !$acc enter data create(hc_comp, sc_comp, vc_comp)
+     
+     !! 3d arrays initialization:
+     !!$acc kernels present(hc_comp, sc_comp, vc_comp, ew_comp)
+     !hc_comp = (0.D0, 0.D0)
+     !sc_comp = (0.D0, 0.D0)
+     !vc_comp = (0.D0, 0.D0)
+     !ew_comp = (0.D0, 0.D0)
+     !!$acc end kernels     
 
      !$acc parallel loop collapse(2) present(hc, sc, vc, hc_comp, sc_comp, vc_comp)
      do i = 1, nbase_max
@@ -456,49 +463,84 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                  vc_comp(j,i,i_batch) = vc(j,i)
          end do
      end do
+     
+     !$acc wait
+     !!$acc update self(hc_comp)
 
+     !!$acc update self(sc_comp)
+     !print *, 'Debugging Hc NEW', hc_comp(:,1,1)
+     !print *, 'Debugging Sc NEW', sc_comp(:,1,1)
+     
+     info = cudaDeviceSynchronize()
 
+     !!$omp master
+     !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp, vc(1:nbase_max,1:nbase_max), ew(1:nbase_max))
      CALL start_clock( 'cegterg:diag' )
+     !call omp_set_lock(cegterg_locker)
      !$omp master
-     !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp)
      IF( my_bgrp_id == root_bgrp_id ) THEN
         CALL diaghg( nbase_max, nvec, hc_comp, sc_comp, nbase_max, ew_comp, vc_comp, n_k, me_bgrp, root_bgrp, intra_bgrp_comm )
      END IF
-     !$acc end host_data
+     !!$acc end host_data
 
      !$omp end master
      !$omp barrier 
      
      !$acc wait
 
-     !$acc parallel loop present(ew)
+     info = cudaDeviceSynchronize()
+     
+     !call omp_unset_lock(cegterg_locker)
+     
+     !$acc parallel loop async(async_id)
      DO i = 1, nbase_max
           ew(i) = ew_comp(i, i_batch)
      END DO
      
-     !$acc update self(ew)
+     !ew(1:nbase_max) = ew_comp(1:nbase_max, i_batch)
+
+     !!$acc update self(ew)
      
-     print *, 'Debugging', ew
+     !$acc wait(async_id)
+      
+     !print *, 'Debugging ew', ew
+     info = cudaDeviceSynchronize()
 
-
-     !$acc parallel loop collapse(2) present(vc)
+     !$acc parallel loop collapse(2) present(vc, vc_comp)
      DO j = 1, nbase_max
-          DO i = 1, nbase_max
-             vc(i, j) = vc_comp(i, j, i_batch)
-          END DO
+        DO i = 1, nbase_max
+           vc(i, j) = vc_comp(i, j, i_batch)
+        END DO
      END DO
      
-     !$acc update self(vc)
-     print *, 'Debugging Vc', vc(:,1)
+     info = cudaDeviceSynchronize()
+
+     !vc(1:nbase_max,1:nbase_max) = vc_comp(1:nbase_max,1:nbase_max,i_batch)
+     
+     !!$acc host_data use_device(vc, ew)
+     IF( nbgrp > 1 ) THEN
+        CALL mp_bcast( vc, root_bgrp_id, inter_bgrp_comm )
+        CALL mp_bcast( ew, root_bgrp_id, inter_bgrp_comm )
+     ENDIF
+     CALL stop_clock( 'cegterg:diag' )
+     !
+     CALL dev_memcpy_async(e, ew, mycudaStream, (/ 1, nvec /), 1 )
+     !$acc end host_data 
+     !
+     info = cudaDeviceSynchronize()
+     !!$acc update self(vc)
+     !print *, 'Debugging Vc', vc(:,1)
      
      !$acc wait(async_id)
      !!!!M.Iovine - deallocation of new arrays: 
-     !!$acc exit data delete(hc_comp, vc_comp, ew_comp, sc_comp)
+     !$acc exit data delete(hc_comp, vc_comp, sc_comp)
      DEALLOCATE(hc_comp)
      DEALLOCATE(vc_comp)
      DEALLOCATE(sc_comp)
-     DEALLOCATE(ew_comp)
      !!!!
+
+     !$acc wait
+
 !!!! M.Iovine : copy to host of ew, vc, hc, sc for residual norm check :
      !$acc parallel loop present(ew) copyout(ew_host)
      DO i = 1, nvec
@@ -512,7 +554,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
        END DO
      END DO
      
-     print *, 'DEbugging vc host', vc_host(:,1)
+     !print *, 'DEbugging vc host', vc_host(:,1)
 
      !$acc parallel loop collapse(2) present(hc) copyout(hc_host)
      DO i = 1, nbase
@@ -528,118 +570,107 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
         END DO
      END DO
 !!!! M.Iovine - Residual check :
-!DO k = 1, nbase
-    !Hv_chk(:) = (0.0_DP, 0.0_DP)
-    !Sv_chk(:) = (0.0_DP, 0.0_DP)
+DO k = 1, nbase
+    Hv_chk(:) = (0.0_DP, 0.0_DP)
+    Sv_chk(:) = (0.0_DP, 0.0_DP)
 
-   ! DO i = 1, nbase
-        !DO j = 1, nbase
+    DO i = 1, nbase
+        DO j = 1, nbase
 
-        !    Hv_chk(i) = Hv_chk(i) + &
-         !               hc_host(i,j) * vc_host(j,k)
+            Hv_chk(i) = Hv_chk(i) + &
+                        hc_host(i,j) * vc_host(j,k)
 
-       !     Sv_chk(i) = Sv_chk(i) + &
-      !                  sc_host(i,j) * vc_host(j,k)
+            Sv_chk(i) = Sv_chk(i) + &
+                        sc_host(i,j) * vc_host(j,k)
 
-     !   END DO
-    !END DO
+        END DO
+    END DO
 
-    ! r_k = H v_k - lambda_k S v_k
-    !DO i = 1, nbase
-     !   res_chk(i) = Hv_chk(i) - &
-      !               ew_host(k) * Sv_chk(i)
-    !END DO
+    !r_k = H v_k - lambda_k S v_k
+    DO i = 1, nbase
+        res_chk(i) = Hv_chk(i) - &
+                     ew_host(k) * Sv_chk(i)
+    END DO
 
     ! ||r||_2
-    !res_norm_2 = SQRT(SUM(ABS(res_chk(:))**2))
+    res_norm_2 = SQRT(SUM(ABS(res_chk(:))**2))
 
     ! ||r||_inf
-    !res_norm_inf = MAXVAL(ABS(res_chk(:)))
+    res_norm_inf = MAXVAL(ABS(res_chk(:)))
 
-    !max_res_2   = MAX(max_res_2,   res_norm_2)
-    !max_res_inf = MAX(max_res_inf, res_norm_inf)
+    max_res_2   = MAX(max_res_2,   res_norm_2)
+    max_res_inf = MAX(max_res_inf, res_norm_inf)
 
-    !PRINT '(A,I6,A,ES16.8,A,ES16.8)', &
-   !       'Eigenpair ', k, &
-  !        '  residual L2 = ', res_norm_2, &
- !         '  residual Linf = ', res_norm_inf
+    PRINT '(A,I6,A,ES16.8,A,ES16.8)', &
+          'Eigenpair ', k, &
+          '  residual L2 = ', res_norm_2, &
+          '  residual Linf = ', res_norm_inf
 
-! END DO 
+ END DO 
 
 !!!! M.Iovine - S-normlization:
-!DO k = 1, nbase
+DO k = 1, nbase
 
- !   Sv_chk(:) = (0.0_DP, 0.0_DP)
+    Sv_chk(:) = (0.0_DP, 0.0_DP)
 
-  !  DO i = 1, nbase
-   !     DO j = 1, nbase
-    !        Sv_chk(i) = Sv_chk(i) + &
-     !                   sc_host(i,j) * vc_host(j,k)
-      !  END DO
-    !END DO
+    DO i = 1, nbase
+        DO j = 1, nbase
+            Sv_chk(i) = Sv_chk(i) + &
+                        sc_host(i,j) * vc_host(j,k)
+        END DO
+    END DO
 
-    !s_norm = REAL( SUM(CONJG(vc_host(:,k)) * Sv_chk(:)), KIND=DP )
+    s_norm = REAL( SUM(CONJG(vc_host(:,k)) * Sv_chk(:)), KIND=DP )
 
-    !max_snorm_err = MAX(max_snorm_err, ABS(s_norm - 1.0_DP))
+    max_snorm_err = MAX(max_snorm_err, ABS(s_norm - 1.0_DP))
 
-   ! PRINT '(A,I6,A,ES16.8,A,ES16.8)', &
-    !      'Eigenvector ', k, &
-     !     '  S-norm = ', s_norm, &
-      !    '  error = ', ABS(s_norm - 1.0_DP)
+    PRINT '(A,I6,A,ES16.8,A,ES16.8)', &
+          'Eigenvector ', k, &
+          '  S-norm = ', s_norm, &
+          '  error = ', ABS(s_norm - 1.0_DP)
 
-!END DO
+END DO
 
 !!!!
 
 !!!! M.Iovine S-orthogonality:
-!DO k = 1, nbase
+DO k = 1, nbase
 
- ! DO l = 1, nbase
+  DO l = 1, nbase
 
-      ! Compute v_k^H S v_l
+       !Compute v_k^H S v_l
 
-  !    s_norm = 0.0_DP
+      s_norm = 0.0_DP
 
-   !   DO i = 1, nbase
+      DO i = 1, nbase
 
-    !       Sv_chk(i) = (0.0_DP, 0.0_DP)
+           Sv_chk(i) = (0.0_DP, 0.0_DP)
 
-     !      DO j = 1, nbase
-      !          Sv_chk(i) = Sv_chk(i) + &
-       !                     sc_host(i,j) * vc_host(j,l)
-        !   END DO
+           DO j = 1, nbase
+                Sv_chk(i) = Sv_chk(i) + &
+                            sc_host(i,j) * vc_host(j,l)
+           END DO
 
-         !  s_norm = s_norm + &
-          !          REAL(CONJG(vc_host(i,k)) * Sv_chk(i), KIND=DP)
+           s_norm = s_norm + &
+                    REAL(CONJG(vc_host(i,k)) * Sv_chk(i), KIND=DP)
 
-      !END DO
+      END DO
 
-      !IF (k == l) THEN
-       ! ortho_err = ABS(s_norm - 1.0_DP)
-      !ELSE
-       ! ortho_err = ABS(s_norm)
-      !END IF
+      IF (k == l) THEN
+        ortho_err = ABS(s_norm - 1.0_DP)
+      ELSE
+        ortho_err = ABS(s_norm)
+      END IF
 
-     ! max_ortho_err = MAX(max_ortho_err, ortho_err)
+      max_ortho_err = MAX(max_ortho_err, ortho_err)
 
-    !END DO
+    END DO
 
-!END DO
+END DO
 
-!PRINT *, 'Maximum S-orthogonality error = ', max_ortho_err
+PRINT *, 'Maximum S-orthogonality error = ', max_ortho_err
 
 !!!!
-     IF( nbgrp > 1 ) THEN
-        !$acc host_data use_device(vc, ew)
-        CALL mp_bcast( vc, root_bgrp_id, inter_bgrp_comm )
-        CALL mp_bcast( ew, root_bgrp_id, inter_bgrp_comm )
-        !$acc end host_data
-     ENDIF
-     CALL stop_clock( 'cegterg:diag' )
-     !
-     CALL dev_memcpy_async(e, ew, mycudaStream, (/ 1, nvec /), 1 )
-     !
-
 
 !!!! : M.Iovine - debugging on vc:
 IF (.NOT. ALLOCATED(vc_check)) ALLOCATE(vc_check(nbase,nbase))   !! size to whatever region you actually want to check
@@ -1096,7 +1127,10 @@ END IF
      !
   END DO iterate
   !
-  !$acc exit data delete(ew) async(async_id) 
+  !$acc exit data delete(ew) async(async_id)
+  !$acc exit data delete(ew_comp) async(async_id) !!! M.Iovine - we delete ew_comp data on the device
+  DEALLOCATE( ew_comp ) !!! M.Iovine - we delete ew_comp data on the device
+  !!!
   DEALLOCATE( recv_counts )
   DEALLOCATE( displs )
   DEALLOCATE( conv )
