@@ -1,4 +1,4 @@
-
+!
 ! Copyright (C) 2001-2015 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
@@ -13,14 +13,13 @@
 !
 ! Modified for batched k-point processing
 !
-! M.Iovine : added the argument n_k as INTENT(IN)
 #define ZERO ( 0.D0, 0.D0 )
 #define ONE  ( 1.D0, 0.D0 )
 !
 !----------------------------------------------------------------------------
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
-                    e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, n_k )
+                    e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -33,7 +32,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
 #if defined(__CUDA)
   use cublas
   use cudafor
-  USE ieee_arithmetic, ONLY: ieee_is_nan, ieee_is_finite !! M.Iovine - added for debugging
 #endif
   USE util_param,    ONLY : DP
   USE mp_bands_util, ONLY : intra_bgrp_comm, inter_bgrp_comm, root_bgrp_id,&
@@ -43,7 +41,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   USE device_memcpy_m, ONLY : dev_memcpy, dev_memset, dev_memcpy_async, &
                               dev_memset_async !Fixed: import device memory management routines
   USE mytime,          ONLY : clock_thread, clock_cuda_stream, cegterg_locker !Fixed: import thread private varibale
-  USE openacc,         ONLY : acc_get_cuda_stream
+  USE openacc,         ONLY : acc_get_cuda_stream !Fixed
 #if defined(_OPENMP) 
   USE omp_lib, only:  omp_set_lock, omp_unset_lock
 #endif
@@ -80,7 +78,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! number of unconverged roots
   INTEGER, INTENT(OUT) :: nhpsi
     ! total number of individual hpsi
-  INTEGER, INTENT(IN) :: n_k !! M.Iovine : added the number of k-points as argument in input for the allocation of arrays
   !
   ! ... LOCAL variables
   !
@@ -102,64 +99,13 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! Hamiltonian on the reduced basis
     ! S matrix on the reduced basis
     ! the eigenvectors of the Hamiltonian
-  COMPLEX(DP), ALLOCATABLE :: hc_batched(:,:,:), sc_batched(:,:,:), vc_batched(:,:,:) !! M.Iovine - we define the corresponding 3D arrays for batched calls directly on the device
-  !$acc declare device_resident(hc_batched, sc_batched, vc_batched)
-  COMPLEX(DP), ALLOCATABLE :: hc_comp(:,:,:), sc_comp(:,:,:), vc_comp(:,:,:) !! M.Iovine - we define the corresponding 3D arrays
+  COMPLEX(DP), ALLOCATABLE :: hc_comp(:,:,:), sc_comp(:,:,:), vc_comp(:,:,:)
   !$acc declare device_resident(hc_comp, sc_comp, vc_comp)
-  COMPLEX(DP), ALLOCATABLE :: hc_batched_old(:,:,:), sc_batched_old(:,:,:) !! M.Iovine added for debugging
-  !$acc declare device_resident(hc_batched_old, sc_batched_old )
-  REAL(DP), ALLOCATABLE :: ew_batched(:,:) !! M.Iovine - eigenvalues of the reduced Hamiltonian considered for batch on k-points directly on the device
-  !$acc declare device_resident(ew_batched)
-  REAL(DP), ALLOCATABLE :: ew_comp(:,:) !! M.Iovine - eigenvalues of the reduced Hamiltonian
-  !!$acc declare device_resident(ew_comp)
-  REAL(DP), ALLOCATABLE :: ew_full_check(:) !! Added for debugging!!
-  LOGICAL, ALLOCATABLE :: ew_full_nan(:), ew_full_inf(:) !! Added for debugging!!
-  COMPLEX(DP), ALLOCATABLE :: vc_full_check(:,:,:) !! Added for debugging!!
-  LOGICAL, ALLOCATABLE :: vc_full_nan(:,:), vc_full_inf(:,:) !! Added for debugging!!
-  INTEGER :: first_nan_idx, ii_check !! M.IOvine - Added for debugging!!
-  LOGICAL :: psi_has_nan !! M.IOvine - Added for debugging!!
-  INTEGER :: ig, ibnd !! M.IOvine - Added for debugging!!
-  COMPLEX(DP) :: maxv_hc, maxv_sc, maxv_vc !! M.Iovine - we define the variables for the maximum elements of the submatrix of dim. nbase x nbase 
-  INTEGER, ALLOCATABLE :: nbase_batched(:) !! M.Iovine - definition of array to store the nbase value of each k_point -> of each thread
-  INTEGER :: nbase_max, l !! M.Iovine - variable to store the maximum nbase found among the k-points and index l for the padding
-  INTEGER :: info !!! M.Iovine - introduced for debugging
-  !REAL(DP), ALLOCATABLE :: ew_host(:) !!! M.Iovine - introduced for debugging
-  !COMPLEX(DP), ALLOCATABLE :: vc_host(:,:) !!! M.Iovine - introduced for debugging
-  COMPLEX(DP), ALLOCATABLE :: vc_host(:,:) !!! M.Iovine - introduced for debugging
-  REAL(DP), ALLOCATABLE :: ew_host(:) !!! M.Iovine - introduced for debugging
-  COMPLEX(DP), ALLOCATABLE :: sc_host(:,:) !!! M.Iovine - introduced for debugging
-  COMPLEX(DP), ALLOCATABLE :: hc_host(:,:) !!! M.Iovine - introduced for debugging
-  REAL(DP), ALLOCATABLE :: e_check(:) !!! M.Iovine - introduced for debugging
-  COMPLEX(DP), ALLOCATABLE :: hc_entry_check(:,:) !!! M.Iovine - degugging line
-  LOGICAL, ALLOCATABLE :: hc_entry_nan(:,:) !!! M.Iovine - debugging line
-  COMPLEX(DP), ALLOCATABLE :: hc_pre_check(:,:) !!! M.Iovine - debugging line
-  LOGICAL :: has_nan_v, has_inf_v !!! M.Iovine - debugging line
-  REAL(DP) :: max_abs_v !!! M.Iovine - debugging line
-  COMPLEX(DP), ALLOCATABLE :: vc_check(:,:) !!M.Iovine - debugging line
-  COMPLEX(DP), ALLOCATABLE :: ew_check(:) !!M.Iovine - debugging line
-  REAL(DP) :: ef_check(nvec) !!M.Iovine - debugging line
-  INTEGER :: istat !! M.Iovine - added for synchronization
-  COMPLEX(DP), DEVICE, ALLOCATABLE :: d_res_chk(:), d_Sv_chk(:) !! M.Iovine - added for synchronization
-  COMPLEX(DP), ALLOCATABLE         :: h_res_chk(:), h_Sv_chk(:) !! M.Iovine - added for synchronization
-  REAL(DP)                         :: e1_chk, ortho_val_chk !! M.Iovine - added for synchronization
-  INTEGER                          :: i_chk, j_chk, n_dim_chk !! M.Iovine - added for synchronization
-  COMPLEX(DP), ALLOCATABLE :: Sv_chk(:) !! M.Iovine - added for synchronization
-  COMPLEX(DP), ALLOCATABLE :: res_chk(:) !! M.Iovine - added for synchronization
-  COMPLEX(DP), ALLOCATABLE :: Hv_chk(:) !! M.Iovine - added for synchronization
-  REAL(DP) :: res_norm_chk !! M.Iovine - added for synchronization
-  REAL(DP) :: s_norm_chk !! M.Iovine - added for synchronization
-  REAL(DP) :: lambda_chk !! M.Iovine - added for synchronization
-  REAL(DP) :: max_res_2   = 0.0_DP !! M.Iovine - added for synchronization
-  REAL(DP) :: max_res_inf = 0.0_DP !! M.Iovine - added for synchronization
-  REAL(DP) :: s_norm !! M.Iovine - added for synchronization
-  REAL(DP) :: max_snorm_err = 0.0_DP !! M.Iovine - added for synchronization
-  REAL(DP) :: res_norm_2 !!M.Iovine - added for synchronization
-  REAL(DP) :: res_norm_inf !!M.Iovine - added for synchronization
-  REAL(DP) :: max_ortho_err = 0.0_DP !!M.Iovine - added for synchronization
-  REAL(DP) :: ortho_err !!M.Iovine - added for synchronization
   REAL(DP), ALLOCATABLE :: ew(:)
   !!$acc declare device_resident(ew)
     ! eigenvalues of the reduced hamiltonian
+  REAL(DP), ALLOCATABLE :: ew_comp(:,:)
+  !$acc declare device_resident(ew_comp)
   COMPLEX(DP), ALLOCATABLE :: psi(:,:), hpsi(:,:), spsi(:,:)
     ! work space, contains psi
     ! the product of H and psi
@@ -177,6 +123,17 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   ! GPU stream management
   INTEGER :: async_id
   INTEGER(kind=cuda_stream_kind) :: mycudaStream, prova
+  INTEGER :: istat !! M.Iovine - added for synchronization
+  COMPLEX(DP), ALLOCATABLE :: h_hc(:,:), h_sc(:,:)
+COMPLEX(DP), ALLOCATABLE :: h_vc_chk(:), h_Sv_chk(:), h_res_chk(:)
+REAL(DP)                 :: res_norm_chk, ortho_val_chk
+INTEGER                  :: i_chk, j_chk, n_dim_chk
+COMPLEX(DP) :: d_Sv_elem
+COMPLEX(DP) :: d_res_elem
+REAL(DP)    :: e1_chk
+COMPLEX(DP), ALLOCATABLE :: vc_check(:,:) !!M.Iovine - debugging line
+COMPLEX(DP), ALLOCATABLE :: ew_check(:) !!M.Iovine - debugging line
+REAL(DP) :: e_check(nvec) !!M.Iovine - debugging line
 #if defined(__CUDA)
   type(cublasHandle) :: myblasHandle(20) 
   INTEGER :: istat_cublas
@@ -258,40 +215,17 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate vc ', ABS(ierr) )
   ALLOCATE( ew( nvecx ), STAT=ierr )
-  !$acc enter data create(ew) async(async_id)
+  !$acc enter data create(ew) async(async_id) 
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate ew ', ABS(ierr) )
   ALLOCATE( conv( nvec ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate conv ', ABS(ierr) )
   ALLOCATE( recv_counts(mp_size(inter_bgrp_comm)), displs(mp_size(inter_bgrp_comm)) )
-  !!M.Iovine - allocation on the device of 3D arrays for batching :
-  ALLOCATE(hc_batched(nvecx, nvecx, n_k))
-  ALLOCATE(sc_batched(nvecx, nvecx, n_k))
-  ALLOCATE(vc_batched(nvecx, nvecx, n_k))
-  ALLOCATE(hc_batched_old(nvecx, nvecx, n_k)) !!M.Iovine - debugging
-  ALLOCATE(sc_batched_old(nvecx, nvecx, n_k)) !!M.Iovine - debugging
-  ALLOCATE(ew_batched(nvecx, n_k))
-  ALLOCATE(nbase_batched(n_k))
-  !ALLOCATE(ew_host(n_k)) !!! introduced for debugging
-  !ALLOCATE(vc_host(nvecx,n_k)) !!! introduced for debugging
   !
   notcnv = nvec
   nbase  = nvec
   conv   = .FALSE.
-  
-  !!!DEBUGG LINES:
-  ALLOCATE(hc_host(nbase, nbase))
-  ALLOCATE(vc_host(nbase,nbase))
-  ALLOCATE(ew_host(nbase))
-  ALLOCATE(sc_host(nbase,nbase))
-  ALLOCATE(Sv_chk(nbase))
-  ALLOCATE(Hv_chk(nbase))
-  ALLOCATE(res_chk(nbase))
-  ALLOCATE(ew_comp(nbase, nbase)) !!M.Iovine - allocation of ew_comp!!
-  !$acc enter data create(ew_comp) async(async_id) !!M.Iovine - allocation of ew_comp!!
-  !!
-
   !
   !$acc host_data use_device(evc, psi)
   CALL dev_memcpy_async(psi, evc, mycudaStream, (/ 1 , npwx*npol /), 1, &
@@ -395,129 +329,86 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !
      ! ... diagonalize the reduced hamiltonian
      !
-     !!$acc host_data use_device(hc, sc, vc, ew, hc_batched, sc_batched, vc_batched, ew_batched)
-     !CALL start_clock( 'cegterg:diag' )
-     !!$acc wait(async_id) !! M.Iovine - we add a wait before the assignment to the 3d arrays
-     !call omp_set_lock(cegterg_locker) !!!! M.Iovine - We comment the line
-     !!!! M.IOvine - Changes for 3D arrays: 
-     nbase_batched(i_batch) = nbase !!!M.Iovine : we store the dimension for the current thread
-     !!$omp barrier
-     !!! M.Iovine : we find the maximum for nbase_batched and nvecx_batched :
-     nbase_max = maxval(nbase_batched)
-     
-     !!$acc parallel loop collapse(2) present(hc, sc, hc_batched, sc_batched, vc_batched)
-     do i = 1, nvecx
-        do j = 1, nvecx
-                hc_batched(j,i,i_batch) = CMPLX(hc(j,i), kind=DP)
-                sc_batched(j,i,i_batch) = CMPLX(sc(j,i), kind=DP)
-                vc_batched(j,i,i_batch) = CMPLX(vc(j,i), kind=DP)
-        end do
-     end do
-     
-
- !!$acc parallel present(ew, ew_batched)
- !do j = 1, nvecx
-  !    ew_batched(j,i_batch) = ew(j)
- !end do
-      
-     !!!M.Iovine - for each thread, we write the corresponding matricesin the batched arrays and we add the Padding:
-     !if (nbase < nbase_max) then
-       !!! We find the maximum element of the nbasexnbase arrays:
-       !maxv_hc = maxval(abs(hc_batched(1:nbase,1:nbase,i_batch)))
-       !do l=(nbase+1), nbase_max
-            !hc_batched(:,l:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-            !hc_batched(l:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-            !sc_batched(:,l:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-            !sc_batched(l:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-            !vc_batched(:,l:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-            !vc_batched(l:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-  !!! Diagonal elements (we base them on the maximum element      of the reduced matrices --> we multiply for 10^5 for faster convergen     ce
-            !hc_batched(l,l,i_batch) = CMPLX(l*1e3,0.D0,kind=DP)
-            !sc_batched(l,l,i_batch) = CMPLX(1.D0,0.D0,kind=DP)
-            !vc_batched(l,l,i_batch) = CMPLX(1.D0,0.D0,kind=DP)
-       !end do
-       !print *, 'I am inside the Padding loop'
-     !end if
-
-     !!$omp master
-     
-     !!!M.Iovine - we copy part of the 3d arrays into the computation arrays of dimension : nbase x nbase x n_k
-     IF (.NOT. ALLOCATED(hc_comp)) ALLOCATE(hc_comp(nbase_max,nbase_max,n_k))
-     IF (.NOT. ALLOCATED(sc_comp)) ALLOCATE(sc_comp(nbase_max,nbase_max,n_k))
-     IF (.NOT. ALLOCATED(vc_comp)) ALLOCATE(vc_comp(nbase_max,nbase_max,n_k))
-     !$acc enter data create(hc_comp, sc_comp, vc_comp)
-     
-     !! 3d arrays initialization:
-     !!$acc kernels present(hc_comp, sc_comp, vc_comp, ew_comp)
-     !hc_comp = (0.D0, 0.D0)
-     !sc_comp = (0.D0, 0.D0)
-     !vc_comp = (0.D0, 0.D0)
-     !ew_comp = (0.D0, 0.D0)
-     !!$acc end kernels     
-
-     !$acc parallel loop collapse(2) present(hc, sc, vc, hc_comp, sc_comp, vc_comp)
-     do i = 1, nbase_max
-         do j = 1, nbase_max
-                 hc_comp(j,i,i_batch) = hc(j,i)
-                 sc_comp(j,i,i_batch) = sc(j,i)
-                 vc_comp(j,i,i_batch) = vc(j,i)
-         end do
-     end do
-     
-     !$acc wait
-     !!$acc update self(hc_comp)
-
-     !!$acc update self(sc_comp)
-     !print *, 'Debugging Hc NEW', hc_comp(:,1,1)
-     !print *, 'Debugging Sc NEW', sc_comp(:,1,1)
-     
-     info = cudaDeviceSynchronize()
-
-     !!$omp master
-     !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp, vc(1:nbase_max,1:nbase_max), ew(1:nbase_max))
+     !$acc host_data use_device(hc, sc, vc, ew)
      CALL start_clock( 'cegterg:diag' )
-     !call omp_set_lock(cegterg_locker)
-     !$omp master
+     call omp_set_lock(cegterg_locker) 
      IF( my_bgrp_id == root_bgrp_id ) THEN
-        CALL diaghg( nbase_max, nvec, hc_comp, sc_comp, nbase_max, ew_comp, vc_comp, n_k, me_bgrp, root_bgrp, intra_bgrp_comm )
+        ALLOCATE(vc_comp(nvecx, nvecx, 1))
+        ALLOCATE(hc_comp(nvecx, nvecx, 1))
+        ALLOCATE(sc_comp(nvecx, nvecx, 1))
+        ALLOCATE(ew_comp(nvecx, 1))
+        !$acc kernels async(async_id)
+        vc_comp(:,:,1) = vc(:,:)
+        hc_comp(:,:,1) = hc(:,:)
+        sc_comp(:,:,1) = sc(:,:)
+        !$acc end kernels
+        !$acc wait
+        !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp)
+        CALL diaghg( nbase, nvec, hc_comp, sc_comp, nvecx, ew_comp, vc_comp, 1, me_bgrp, root_bgrp, intra_bgrp_comm )
+        !$acc end host_data
+        !$acc wait
+        !$acc kernels async(async_id)
+        vc(:,:) = vc_comp(:,:,1)
+        hc(:,:) = hc_comp(:,:,1)
+        sc(:,:) = sc_comp(:,:,1)
+        ew(:) = ew_comp(:,1)
+        !$acc end kernels
      END IF
-     !!$acc end host_data
+     !$acc wait(async_id) 
+    
+     !!!! DEBUGGInG: 
+     IF (my_bgrp_id == root_bgrp_id) THEN
+      n_dim_chk = SIZE(hc, 1)
 
-     !$omp end master
-     !$omp barrier 
-     
-     !$acc wait
+      ! Execute 2D contraction directly on 1 GPU thread
+      !$acc serial present(sc, vc) private(i_chk, j_chk, d_Sv_elem)
+      ortho_val_chk = 0.0_DP
 
-     info = cudaDeviceSynchronize()
-     
-     !call omp_unset_lock(cegterg_locker)
-     
-     !$acc parallel loop async(async_id)
-     DO i = 1, nbase_max
-          ew(i) = ew_comp(i, i_batch)
-     END DO
-     
-     !ew(1:nbase_max) = ew_comp(1:nbase_max, i_batch)
+      DO i_chk = 1, n_dim_chk
+         d_Sv_elem = (0.0_DP, 0.0_DP)
+         DO j_chk = 1, n_dim_chk
+            d_Sv_elem = d_Sv_elem + sc(i_chk, j_chk) * vc(j_chk, 1)
+         END DO
+         ortho_val_chk = ortho_val_chk + REAL(CONJG(vc(i_chk, 1)) * d_Sv_elem, KIND=DP)
+      END DO
 
-     !!$acc update self(ew)
-     
-     !$acc wait(async_id)
-      
-     !print *, 'Debugging ew', ew
-     info = cudaDeviceSynchronize()
+      PRINT *, "DEBUG [CORRECT GPU S-Norm]:", ortho_val_chk
+      !$acc end serial
 
-     !$acc parallel loop collapse(2) present(vc, vc_comp)
-     DO j = 1, nbase_max
-        DO i = 1, nbase_max
-           vc(i, j) = vc_comp(i, j, i_batch)
-        END DO
-     END DO
-     
-     info = cudaDeviceSynchronize()
+      !$acc wait
+      FLUSH(6)
+     END IF
 
-     !vc(1:nbase_max,1:nbase_max) = vc_comp(1:nbase_max,1:nbase_max,i_batch)
-     
-     !!$acc host_data use_device(vc, ew)
+   !!!! DEBUGGING :   
+   IF (my_bgrp_id == root_bgrp_id) THEN
+
+      n_dim_chk = SIZE(hc, 1)
+
+      ! Compute residual norm ||H*v_1 - lambda_1*S*v_1||_2 directly on 1 GPU thread
+      !$acc serial present(hc, sc, vc, e) private(i_chk, j_chk, d_res_elem, e1_chk)
+      e1_chk       = e(1)
+      res_norm_chk = 0.0_DP
+
+      DO i_chk = 1, n_dim_chk
+         d_res_elem = (0.0_DP, 0.0_DP)
+         DO j_chk = 1, n_dim_chk
+            d_res_elem = d_res_elem + (hc(i_chk, j_chk) - e1_chk * sc(i_chk, j_chk)) * vc(j_chk, 1)
+         END DO
+         res_norm_chk = res_norm_chk + REAL(CONJG(d_res_elem) * d_res_elem, KIND=DP)
+      END DO
+
+      res_norm_chk = SQRT(res_norm_chk)
+
+      PRINT *, "DEBUG [GPU Residual L2 Norm]:", res_norm_chk
+      !$acc end serial
+
+      !$acc wait
+      FLUSH(6)
+
+   END IF
+   
+   !!!!!
+     call omp_unset_lock(cegterg_locker)
      IF( nbgrp > 1 ) THEN
         CALL mp_bcast( vc, root_bgrp_id, inter_bgrp_comm )
         CALL mp_bcast( ew, root_bgrp_id, inter_bgrp_comm )
@@ -525,217 +416,57 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      CALL stop_clock( 'cegterg:diag' )
      !
      CALL dev_memcpy_async(e, ew, mycudaStream, (/ 1, nvec /), 1 )
-     !$acc end host_data 
+     !$acc end host_data
      !
-     info = cudaDeviceSynchronize()
-     !!$acc update self(vc)
-     !print *, 'Debugging Vc', vc(:,1)
-     
-     !$acc wait(async_id)
-     !!!!M.Iovine - deallocation of new arrays: 
-     !$acc exit data delete(hc_comp, vc_comp, sc_comp)
-     DEALLOCATE(hc_comp)
-     DEALLOCATE(vc_comp)
-     DEALLOCATE(sc_comp)
-     !!!!
-
-     !$acc wait
-
-!!!! M.Iovine : copy to host of ew, vc, hc, sc for residual norm check :
-     !$acc parallel loop present(ew) copyout(ew_host)
-     DO i = 1, nvec
-          ew_host(i) = ew(i)
-     END DO
  
-     !$acc parallel loop collapse(2) present(vc) copyout(vc_host)
-     DO i = 1, nvec
-       DO j = 1, nvec
-        vc_host(j,i) = vc(j,i)
-       END DO
-     END DO
-     
-     !print *, 'DEbugging vc host', vc_host(:,1)
+ !!! Debugging - M.Iovine - vc print in a file:
+ !!!! : M.Iovine - debugging on vc:
+ IF (.NOT. ALLOCATED(vc_check)) ALLOCATE(vc_check(nbase,nbase))   !! size to whatever region you actually want to check
+ !$acc parallel loop collapse(2) present(vc) copyout(vc_check)
+ do i = 1, nbase
+    do j = 1, nbase
+       vc_check(j,i) = vc(j,i)
+    end do
+ end do
+  
+ open(unit=10, file='vc_print_old.dat', status ='replace', action='write')
+  do i = 1, nbase
+          write (10, '(10("(",F10.6,",",F10.6,") "))') (vc_check(i,j), j = 1, nbase)
+  end do
+  close(10)
 
-     !$acc parallel loop collapse(2) present(hc) copyout(hc_host)
-     DO i = 1, nbase
-       DO j = 1, nbase
-          hc_host(j,i) = hc(j,i)
-       END DO
-     END DO
-     
-     !$acc parallel loop collapse(2) present(sc) copyout(sc_host)
-     DO i = 1, nbase
-        DO j = 1, nbase
-          sc_host(j,i) = sc(j,i)
-        END DO
-     END DO
-!!!! M.Iovine - Residual check :
-DO k = 1, nbase
-    Hv_chk(:) = (0.0_DP, 0.0_DP)
-    Sv_chk(:) = (0.0_DP, 0.0_DP)
-
-    DO i = 1, nbase
-        DO j = 1, nbase
-
-            Hv_chk(i) = Hv_chk(i) + &
-                        hc_host(i,j) * vc_host(j,k)
-
-            Sv_chk(i) = Sv_chk(i) + &
-                        sc_host(i,j) * vc_host(j,k)
-
-        END DO
-    END DO
-
-    !r_k = H v_k - lambda_k S v_k
-    DO i = 1, nbase
-        res_chk(i) = Hv_chk(i) - &
-                     ew_host(k) * Sv_chk(i)
-    END DO
-
-    ! ||r||_2
-    res_norm_2 = SQRT(SUM(ABS(res_chk(:))**2))
-
-    ! ||r||_inf
-    res_norm_inf = MAXVAL(ABS(res_chk(:)))
-
-    max_res_2   = MAX(max_res_2,   res_norm_2)
-    max_res_inf = MAX(max_res_inf, res_norm_inf)
-
-    PRINT '(A,I6,A,ES16.8,A,ES16.8)', &
-          'Eigenpair ', k, &
-          '  residual L2 = ', res_norm_2, &
-          '  residual Linf = ', res_norm_inf
-
- END DO 
-
-!!!! M.Iovine - S-normlization:
-DO k = 1, nbase
-
-    Sv_chk(:) = (0.0_DP, 0.0_DP)
-
-    DO i = 1, nbase
-        DO j = 1, nbase
-            Sv_chk(i) = Sv_chk(i) + &
-                        sc_host(i,j) * vc_host(j,k)
-        END DO
-    END DO
-
-    s_norm = REAL( SUM(CONJG(vc_host(:,k)) * Sv_chk(:)), KIND=DP )
-
-    max_snorm_err = MAX(max_snorm_err, ABS(s_norm - 1.0_DP))
-
-    PRINT '(A,I6,A,ES16.8,A,ES16.8)', &
-          'Eigenvector ', k, &
-          '  S-norm = ', s_norm, &
-          '  error = ', ABS(s_norm - 1.0_DP)
-
-END DO
-
-!!!!
-
-!!!! M.Iovine S-orthogonality:
-DO k = 1, nbase
-
-  DO l = 1, nbase
-
-       !Compute v_k^H S v_l
-
-      s_norm = 0.0_DP
-
-      DO i = 1, nbase
-
-           Sv_chk(i) = (0.0_DP, 0.0_DP)
-
-           DO j = 1, nbase
-                Sv_chk(i) = Sv_chk(i) + &
-                            sc_host(i,j) * vc_host(j,l)
-           END DO
-
-           s_norm = s_norm + &
-                    REAL(CONJG(vc_host(i,k)) * Sv_chk(i), KIND=DP)
-
-      END DO
-
-      IF (k == l) THEN
-        ortho_err = ABS(s_norm - 1.0_DP)
-      ELSE
-        ortho_err = ABS(s_norm)
-      END IF
-
-      max_ortho_err = MAX(max_ortho_err, ortho_err)
-
-    END DO
-
-END DO
-
-PRINT *, 'Maximum S-orthogonality error = ', max_ortho_err
-
-!!!!
-
-!!!! : M.Iovine - debugging on vc:
-IF (.NOT. ALLOCATED(vc_check)) ALLOCATE(vc_check(nbase,nbase))   !! size to whatever region you actually want to check
-!$acc parallel loop collapse(2) present(vc) copyout(vc_check)
-do i = 1, nbase
-   do j = 1, nbase
-      vc_check(j,i) = vc(j,i)
+ !!! Debugging - M.Iovine - ew print in a file:
+ !!!! : M.Iovine - debugging on ew:
+  IF (.NOT. ALLOCATED(ew_check)) ALLOCATE(ew_check(nvecx))   !! size to whatever region you actually want to check
+  !$acc parallel loop present(ew) copyout(ew_check)
+  do i = 1, nvecx
+        ew_check(i) = ew(i)
+  end do
+ 
+  open(unit=10, file='ew_print_old.dat', status ='replace', action='write')
+   do i = 1, nvecx
+           write(10, '(F6.2)') ew_check(i)
    end do
-end do
-
-!!! Debugging - M.Iovine - vc print in a file:
-   open(unit=10, file='vc_print_new.dat', status ='replace', action='write')
-     do i = 1, nbase_max
-           write (10, '(10("(",F10.6,",",F10.6,") "))') (vc_check(i,j), j = 1, nbase_max)
-     end do
+  close(10)
+ 
+  !!! Debugging - M.Iovine - e print in a file:
+  !!!! : M.Iovine - debugging on ew:
+   !$acc parallel loop present(e) copyout(e_check)
+   do i = 1, nvecx
+         e_check(i) = e(i)
+   end do
+ 
+   open(unit=10, file='e_print_old.dat', status ='replace', action='write')
+    do i = 1, nvec
+            write(10, '(F6.2)') e_check(i)
+    end do
    close(10)
 
-!!!!
-
-!!!! : M.Iovine - debugging on ew:
-IF (.NOT. ALLOCATED(ew_check)) ALLOCATE(ew_check(nbase))   !! size to whatever region you actually want to check
-!$acc parallel loop  present(ew) copyout(ew_check)
-do i = 1, nbase
-      ew_check(i) = ew(i)
-end do
-
-!!! Debugging - M.Iovine - vc print in a file:
-open(unit=10, file='ew_print_new.dat', status ='replace', action='write')
-do i = 1, nbase
-        write(10, '(F6.2)') ew_check(i)
-end do
-close(10)
-
-   !!! Debugging - M.Iovine - e print in a file:
-   !!!! : M.Iovine - debugging on ew:
-    !$acc parallel loop present(e) copyout(e_check)
-    do i = 1, nvec
-          ef_check(i) = e(i)
-    end do
-
-    open(unit=10, file='e_print_new.dat', status ='replace', action='write')
-     do i = 1, nvec
-             write(10, '(F6.2)') ef_check(i)
-     end do
-    close(10)
-!!!!!!!
+ !!!!
 
 
-has_nan_v = ANY(IEEE_IS_NAN(REAL(vc_check))) .OR. ANY(IEEE_IS_NAN(AIMAG(vc_check)))
-has_inf_v = .NOT. ALL(IEEE_IS_FINITE(REAL(vc_check))) .OR. .NOT. ALL(IEEE_IS_FINITE(AIMAG(vc_check)))
-max_abs_v = MAXVAL(ABS(vc_check))
-
-        IF (has_nan_v) THEN
-               CALL lax_error__( 'cdiaghg', 'CRITICAL: NaN detected in vc / v_d!', 1 )
-        ELSE IF (has_inf_v) THEN
-               CALL lax_error__( 'cdiaghg', 'CRITICAL: Inf detected in vc / v_d!', 1 )
-        ELSE IF (max_abs_v < 1.0d-12) THEN
-               WRITE(*,*) 'WARNING: vc / v_d appears to be completely ZERO or uninitialized!'
-        ELSE
-               WRITE(*,'(A,E16.8)') ' [VC CHECK] v_d input valid. maxabs = ', max_abs_v
-        END IF
-
-END IF
- !!!!!!  
-
+ END IF
+  !
   ! ... iterate
   !
   iterate: DO kter = 1, maxter
@@ -842,25 +573,6 @@ END IF
      CALL g_psi_ptr( npwx, npw, notcnv, npol, psi(1,nb1), ew(nb1), i_batch )
      !$acc end host_data
      !
-     !!!! M.Iovine - debugging check for NaN prints in output after preconditioning:
-     ! --- Right after preconditioning (e.g., after CALL g_psi or psi update) ---
-     !psi_has_nan = .FALSE.
-
-     !!$acc parallel loop collapse(2) reduction(.OR. : psi_has_nan) present(psi)
-     !DO ibnd = 1, notcnv
-      !  DO ig = 1, npw
-       !         IF (IEEE_IS_NAN(REAL(psi(ig, ibnd))) .OR. IEEE_IS_NAN(AIMAG(psi(ig, ibnd)))) THEN
-        !           psi_has_nan = .TRUE.
-         !       END IF
-       ! END DO
-     !END DO
-
-    ! IF (psi_has_nan) THEN
-     !   WRITE(6, '(A, I0)') 'CRITICAL: NaN detected in psi after preconditioning at i_batch = ', i_batch
-      !  FLUSH(6)
-       ! STOP 'cegterg: psi infected with NaN'
-    ! END IF
-     !!!!
      ! ... "normalize" correction vectors psi(:,nb1:nbase+notcnv) in
      ! ... order to improve numerical stability of subspace diagonalization
      ! ... (cdiaghg) ew is used as work array :
@@ -1018,7 +730,7 @@ END IF
        ELSE
          conv(i) = ( ( ABS( ew(i) - e(i) ) < empty_ethr ) )
        END IF 
-     END DO
+     END DO 
      !
      ! ... next line useful for band parallelization of exact exchange
      IF ( nbgrp > 1 ) CALL mp_bcast(conv,root_bgrp_id,inter_bgrp_comm)
@@ -1029,7 +741,6 @@ END IF
      CALL dev_memcpy_async (e, ew, mycudaStream, (/ 1, nvec /) )
      !$acc end host_data
      !
-     
      ! ... if overall convergence has been achieved, or the dimension of
      ! ... the reduced basis set is becoming too large, or in any case if
      ! ... we are at the last iteration refresh the basis set. i.e. replace
@@ -1127,10 +838,7 @@ END IF
      !
   END DO iterate
   !
-  !$acc exit data delete(ew) async(async_id)
-  !$acc exit data delete(ew_comp) async(async_id) !!! M.Iovine - we delete ew_comp data on the device
-  DEALLOCATE( ew_comp ) !!! M.Iovine - we delete ew_comp data on the device
-  !!!
+  !$acc exit data delete(ew) async(async_id) 
   DEALLOCATE( recv_counts )
   DEALLOCATE( displs )
   DEALLOCATE( conv )
@@ -1138,25 +846,6 @@ END IF
   DEALLOCATE( vc )
   DEALLOCATE( hc )
   DEALLOCATE( sc )
-  DEALLOCATE( ew_batched ) !!M.Iovine - Deallocation of the arrays for the bacthed NVIDIA routines
-  DEALLOCATE( vc_batched ) 
-  DEALLOCATE( hc_batched ) 
-  DEALLOCATE( sc_batched )
-  !!! M.Iovine - added for debugging:
-  IF (ALLOCATED(ew_full_check)) DEALLOCATE(ew_full_check, ew_full_nan, ew_full_inf)
-  IF (ALLOCATED(vc_full_check)) DEALLOCATE(vc_full_check, vc_full_nan, vc_full_inf)
-  DEALLOCATE(hc_host)
-  DEALLOCATE(vc_host)
-  DEALLOCATE(ew_host)
-  DEALLOCATE(sc_host)
-  DEALLOCATE(Sv_chk)
-  DEALLOCATE(Hv_chk)
-  DEALLOCATE(res_chk)
-  DEALLOCATE(hc_batched_old) !!M.Iovine - debugging
-  DEALLOCATE(sc_batched_old) !!M.Iovine - debugging
-  DEALLOCATE(vc_check)
-  DEALLOCATE(ew_check)
-  !!!!!!!!!!
   !
   IF ( uspp ) THEN
      !$acc exit data async(async_id) delete(spsi)

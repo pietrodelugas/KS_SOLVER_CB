@@ -996,7 +996,7 @@ print *, '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 
 !! We destroy the cublas handle:
 #if defined(__CUDA)
-    istat_cublas = cublasDestroy(cublas_handle)
+    !istat_cublas = cublasDestroy(cublas_handle)
 #endif
 
 info = cudaDeviceSynchronize()
