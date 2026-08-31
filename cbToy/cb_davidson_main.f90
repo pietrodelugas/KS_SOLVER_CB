@@ -12,7 +12,8 @@ program cb_davidson_main
    use omp_lib,               only: omp_get_thread_num, omp_set_lock, omp_unset_lock, omp_init_lock
 #if defined(__CUDA)
    use openacc,               only: acc_get_cuda_stream
-   use laxlib_cusolver_handles, ONLY : initialize_cusolver_handles, initialize_laxlib_cuda_stream
+   use laxlib_cusolver_handles, ONLY : initialize_cusolver_handles, initialize_laxlib_cuda_stream, initialize_cublas_handles, finalize_cublas_handles
+   !!M.Iovine - initialize_cublas_handle added for cublas initialization
 #endif
    !!use nvpl_lapack,         only: nvpl_lapack_set_num_threads
    implicit none
@@ -63,6 +64,7 @@ program cb_davidson_main
    call input(gamma_only)
    print *, 'Running cb_davidson_main with the following parameters:'
    call initialize_cusolver_handles(nk_batches) 
+   call initialize_cublas_handles(nk_batches) !!M.Iovine - added initialization of cublas handle
    print *, 'nk_batches = ', nk_batches
    !$omp parallel num_threads(nk_batches) default(shared)  shared(t0cpu, nclock, clock_label) 
    call init_clocks(.true.)
@@ -98,7 +100,7 @@ program cb_davidson_main
      !! M.Iovine - we assign a value to the variable n_k:
      n_k = min(nk_batches, nks - ik +1)
      call start_clock('davidson')
-     !$omp parallel num_threads(nk_batches) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label) 
+     !$omp parallel num_threads(nk_batches) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
      !$omp do
      do i_batch = 1, min(nk_batches, nks - ik +1) 
        !clock thread is declared threadprivate in the module 
@@ -159,6 +161,9 @@ program cb_davidson_main
    deallocate( evc_batched, eig_batched )
    deallocate( fft_array_batched, aux_batched )
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
+   
+   call finalize_cublas_handles() !!M.Iovine - we destroy the Cublas handle initialiazed at the begin of the program
+
    call print_clock('davidson')
 
    call print_clock( 'cegterg' )

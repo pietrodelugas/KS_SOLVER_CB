@@ -460,7 +460,7 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   USE openacc, only: c_devptr !! M.Iovine - we include c_devptr
   USE cusolverdn
   USE laxlib_cusolver_handles, ONLY : cusolver_handle, cusolver_initialized, laxlib_cuda_stream, & 
-                                      cusolver_thread 
+                                      cusolver_thread, cublas_handle, cublas_initialized !!M.Iovine - added subroutines for cublas
 #endif
   !
   USE laxlib_parallel_include
@@ -566,7 +566,9 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   ATTRIBUTES( DEVICE )         :: devInfo_d
   !TYPE(cusolverDnHandle), SAVE :: cuSolverHandle !M.Iovine - commented line
   TYPE(cusolverDnHandle), SAVE :: cuSolverHandle_batched !! M.Iovine - we define a proper handle for the batched cdiaghg_gpu
+  TYPE(cublasHandle), SAVE :: cublasnHandle !! M.Iovine - we define a proper handle for cublas!  
   LOGICAL, SAVE                :: cuSolverInitialized = .FALSE.
+  LOGICAL, SAVE                :: cublasInitialized = .FALSE. !! M.Iovine - variable declared for init. check of cublas
   !
   !! Device arrays to save the old values of the Hamiltonian and Overlap matrices!!
   COMPLEX(DP), VARTYPE   :: h_bkp_d(:,:,:), s_bkp_d(:,:,:) !!!! M.Iovine : The array to store the old values of the Hamiltonian before appying the 
@@ -576,16 +578,16 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   TYPE(cusolverDnSyevjInfo) :: syevj_params
 
   !! M.Iovine - we define the variables for the cublas handle:
-  INTEGER(kind=cuda_stream_kind) :: mycudaStream
-  type(cublasHandle) :: cublas_handle
+  !INTEGER(kind=cuda_stream_kind) :: mycudaStream
+  !type(cublasHandle) :: cublas_handle
   INTEGER :: istat_cublas
 
 #endif
   INTEGER :: i, j, k !!!! M.IOvine - added index k for the third dimension of the arrays
-  mycudaStream = laxlib_cuda_stream
-  istat_cublas = cublasCreate(cublas_handle) !!! M.Iovine - introduced cublas handle
-  istat_cublas = cublasSetStream(cublas_handle, mycudaStream) !!!M.IOvine - COMMENTED TO DEBUGG!!
-  IF (istat_cublas /= 0) CALL lax_error__( ' cdiaghg_gpu ', 'cublasSetStream', ABS(istat_cublas) ) 
+  !mycudaStream = laxlib_cuda_stream
+  !istat_cublas = cublasCreate(cublas_handle) !!! M.Iovine - introduced cublas handle
+  !istat_cublas = cublasSetStream(cublas_handle, mycudaStream) !!!M.IOvine - COMMENTED TO DEBUGG!!
+  !IF (istat_cublas /= 0) CALL lax_error__( ' cdiaghg_gpu ', 'cublasSetStream', ABS(istat_cublas) ) 
 #undef VARTYPE
 
   !
@@ -669,6 +671,15 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          info = cusolverDnSetStream(cuSolverHandle_batched, laxlib_cuda_stream) 
          IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnSetStream',  ABS( info ) )
       ENDIF 
+      
+      !!M.Iovine - added setstream and initialization check for cublas Handle:
+      IF ( .NOT. cublas_initialized(cusolver_thread) ) THEN
+           info = cublasCreate(cublas_handle(cusolver_thread))
+           IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasCreate',  ABS( info ) )
+           cublas_initialized(cusolver_thread) = .TRUE.
+           info = cublasSetStream(cublas_handle(cusolver_thread), laxlib_cuda_stream )
+           IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnSetStream',  ABS( info ) )
+      ENDIF
 
 
     !!!! M.Iovine - Cholesky factorization of the s overlap matrix:
@@ -691,6 +702,8 @@ END IF
 
      
     !cuSolverHandle = cusolver_handle(cusolver_thread) !!M.Iovine - this line must before any cuSolver routine kernel call!
+    cublasnHandle = cublas_handle(cusolver_thread) !!M.Iovine - this line is introduced for cublas calls!
+    
     info = cusolverDnZpotrfBatched(cuSolverHandle_batched, CUBLAS_FILL_MODE_LOWER, n, arr_of_ptr_s_d, ldh, d_info(1), n_k)
     IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnZpotrfBatched',  ABS( info ) )
     !!!!
@@ -729,7 +742,7 @@ print *, '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 
     !!!!M.Iovine - triagular pre and post multiplication of Hamiltonian:
     !! Ly = H :
-    info = cublasZtrsmBatched(cublas_handle, CUBLAS_SIDE_LEFT, &
+    info = cublasZtrsmBatched(cublasnHandle, CUBLAS_SIDE_LEFT, &
            CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-LEFT',  ABS( info ) )
@@ -752,7 +765,7 @@ print *, '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 !!!!
 
     !! y = w L(conj. transpose) :
-    info = cublasZtrsmBatched(cublas_handle, CUBLAS_SIDE_RIGHT, &
+    info = cublasZtrsmBatched(cublasnHandle, CUBLAS_SIDE_RIGHT, &
            CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_C, CUBLAS_DIAG_NON_UNIT, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)    
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-RIGT',  ABS( info ) )
@@ -852,7 +865,7 @@ print *, '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 
     !!!! M.Iovine : we need to take into account the fact that the eigenvalues got after the factorization and the triangular matrix mult. are the same of the initial problem, but this is not true for the eigenvectors, so we need to solve a triangular system to get the effective eigenvectors:
     !! M.Iovine : it is important to observe that the current eigenvectors are stored in the h_d matrix: h_d = L(conj. transpose) * eigvect
-    info = cublasZtrsmBatched(cublas_handle, CUBLAS_SIDE_LEFT, &
+    info = cublasZtrsmBatched(cublasnHandle, CUBLAS_SIDE_LEFT, &
            CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_C, CUBLAS_DIAG_NON_UNIT, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-eigenvectors',  ABS( info ) )
@@ -995,9 +1008,10 @@ print *, '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 #endif
 
 !! We destroy the cublas handle:
-#if defined(__CUDA)
+!#if defined(__CUDA)
     !istat_cublas = cublasDestroy(cublas_handle)
-#endif
+!#endif
+!! M.Iovine - we don't destroy the cublas handle
 
 info = cudaDeviceSynchronize()
  IF (info /= 0) CALL lax_error__('cdiaghg_gpu', &

@@ -32,6 +32,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
 #if defined(__CUDA)
   use cublas
   use cudafor
+  use laxlib_cusolver_handles, only : cublas_handle, cublas_initialized, laxlib_cuda_stream, & !!M.Iovine - added use module for LAXlib
+                                      cusolver_thread
 #endif
   USE util_param,    ONLY : DP
   USE mp_bands_util, ONLY : intra_bgrp_comm, inter_bgrp_comm, root_bgrp_id,&
@@ -124,6 +126,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   INTEGER :: async_id
   INTEGER(kind=cuda_stream_kind) :: mycudaStream, prova
   INTEGER :: istat !! M.Iovine - added for synchronization
+  INTEGER :: info !!M.Iovine - added for cublas initialization
   COMPLEX(DP), ALLOCATABLE :: h_hc(:,:), h_sc(:,:)
 COMPLEX(DP), ALLOCATABLE :: h_vc_chk(:), h_Sv_chk(:), h_res_chk(:)
 REAL(DP)                 :: res_norm_chk, ortho_val_chk
@@ -159,12 +162,24 @@ REAL(DP) :: e_check(nvec) !!M.Iovine - debugging line
   ! Setup GPU stream using clock_thread (Fixed)
   async_id = clock_thread
 
-#if defined(__CUDA)
+!#if defined(__CUDA)
   ! Get cuda stream and link cublas to it
-  mycudaStream = clock_cuda_stream
-  istat_cublas = cublasCreate(myblasHandle(i_batch))
-  istat_cublas = cublasSetStream(myblasHandle(i_batch), mycudaStream)
-#endif
+  !mycudaStream = clock_cuda_stream
+  !istat_cublas = cublasCreate(myblasHandle(i_batch))
+  !istat_cublas = cublasSetStream(myblasHandle(i_batch), mycudaStream)
+!#endif
+ 
+  !!M.Iovine - added setstream and initialization check for cublas Handle:
+  IF ( .NOT. cublas_initialized(clock_thread) ) THEN
+        info = cublasCreate(cublas_handle(i_batch))
+        IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cegterg_cublas ', 'cublasCreate',  ABS( info ) )
+        cublas_initialized(clock_thread) = .TRUE.
+        info = cublasSetStream(cublas_handle(i_batch), laxlib_cuda_stream )
+        IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cegterg_cublas ', 'cublasDnSetStream',  ABS( info ) )
+  ENDIF
+  
+  
+  
   !$acc data deviceptr(e) async(async_id) 
   !
   IF ( nvec > nvecx / 2 ) CALL errore( 'cegterg', 'nvecx is too small', 1 )
@@ -342,71 +357,24 @@ REAL(DP) :: e_check(nvec) !!M.Iovine - debugging line
         hc_comp(:,:,1) = hc(:,:)
         sc_comp(:,:,1) = sc(:,:)
         !$acc end kernels
-        !$acc wait
+        !!$acc wait
         !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp)
         CALL diaghg( nbase, nvec, hc_comp, sc_comp, nvecx, ew_comp, vc_comp, 1, me_bgrp, root_bgrp, intra_bgrp_comm )
         !$acc end host_data
-        !$acc wait
+        !!$acc wait
         !$acc kernels async(async_id)
         vc(:,:) = vc_comp(:,:,1)
         hc(:,:) = hc_comp(:,:,1)
         sc(:,:) = sc_comp(:,:,1)
         ew(:) = ew_comp(:,1)
         !$acc end kernels
+        DEALLOCATE(vc_comp)
+        DEALLOCATE(hc_comp)
+        DEALLOCATE(sc_comp)
+        DEALLOCATE(ew_comp)
      END IF
-     !$acc wait(async_id) 
+     !!$acc wait(async_id) 
     
-     !!!! DEBUGGInG: 
-     IF (my_bgrp_id == root_bgrp_id) THEN
-      n_dim_chk = SIZE(hc, 1)
-
-      ! Execute 2D contraction directly on 1 GPU thread
-      !$acc serial present(sc, vc) private(i_chk, j_chk, d_Sv_elem)
-      ortho_val_chk = 0.0_DP
-
-      DO i_chk = 1, n_dim_chk
-         d_Sv_elem = (0.0_DP, 0.0_DP)
-         DO j_chk = 1, n_dim_chk
-            d_Sv_elem = d_Sv_elem + sc(i_chk, j_chk) * vc(j_chk, 1)
-         END DO
-         ortho_val_chk = ortho_val_chk + REAL(CONJG(vc(i_chk, 1)) * d_Sv_elem, KIND=DP)
-      END DO
-
-      PRINT *, "DEBUG [CORRECT GPU S-Norm]:", ortho_val_chk
-      !$acc end serial
-
-      !$acc wait
-      FLUSH(6)
-     END IF
-
-   !!!! DEBUGGING :   
-   IF (my_bgrp_id == root_bgrp_id) THEN
-
-      n_dim_chk = SIZE(hc, 1)
-
-      ! Compute residual norm ||H*v_1 - lambda_1*S*v_1||_2 directly on 1 GPU thread
-      !$acc serial present(hc, sc, vc, e) private(i_chk, j_chk, d_res_elem, e1_chk)
-      e1_chk       = e(1)
-      res_norm_chk = 0.0_DP
-
-      DO i_chk = 1, n_dim_chk
-         d_res_elem = (0.0_DP, 0.0_DP)
-         DO j_chk = 1, n_dim_chk
-            d_res_elem = d_res_elem + (hc(i_chk, j_chk) - e1_chk * sc(i_chk, j_chk)) * vc(j_chk, 1)
-         END DO
-         res_norm_chk = res_norm_chk + REAL(CONJG(d_res_elem) * d_res_elem, KIND=DP)
-      END DO
-
-      res_norm_chk = SQRT(res_norm_chk)
-
-      PRINT *, "DEBUG [GPU Residual L2 Norm]:", res_norm_chk
-      !$acc end serial
-
-      !$acc wait
-      FLUSH(6)
-
-   END IF
-   
    !!!!!
      call omp_unset_lock(cegterg_locker)
      IF( nbgrp > 1 ) THEN
@@ -419,51 +387,6 @@ REAL(DP) :: e_check(nvec) !!M.Iovine - debugging line
      !$acc end host_data
      !
  
- !!! Debugging - M.Iovine - vc print in a file:
- !!!! : M.Iovine - debugging on vc:
- IF (.NOT. ALLOCATED(vc_check)) ALLOCATE(vc_check(nbase,nbase))   !! size to whatever region you actually want to check
- !$acc parallel loop collapse(2) present(vc) copyout(vc_check)
- do i = 1, nbase
-    do j = 1, nbase
-       vc_check(j,i) = vc(j,i)
-    end do
- end do
-  
- open(unit=10, file='vc_print_old.dat', status ='replace', action='write')
-  do i = 1, nbase
-          write (10, '(10("(",F10.6,",",F10.6,") "))') (vc_check(i,j), j = 1, nbase)
-  end do
-  close(10)
-
- !!! Debugging - M.Iovine - ew print in a file:
- !!!! : M.Iovine - debugging on ew:
-  IF (.NOT. ALLOCATED(ew_check)) ALLOCATE(ew_check(nvecx))   !! size to whatever region you actually want to check
-  !$acc parallel loop present(ew) copyout(ew_check)
-  do i = 1, nvecx
-        ew_check(i) = ew(i)
-  end do
- 
-  open(unit=10, file='ew_print_old.dat', status ='replace', action='write')
-   do i = 1, nvecx
-           write(10, '(F6.2)') ew_check(i)
-   end do
-  close(10)
- 
-  !!! Debugging - M.Iovine - e print in a file:
-  !!!! : M.Iovine - debugging on ew:
-   !$acc parallel loop present(e) copyout(e_check)
-   do i = 1, nvecx
-         e_check(i) = e(i)
-   end do
- 
-   open(unit=10, file='e_print_old.dat', status ='replace', action='write')
-    do i = 1, nvec
-            write(10, '(F6.2)') e_check(i)
-    end do
-   close(10)
-
- !!!!
-
 
  END IF
   !
@@ -859,7 +782,7 @@ REAL(DP) :: e_check(nvec) !!M.Iovine - debugging line
   !$acc end data 
   ! Cleanup (Fixed)
 #if defined(__CUDA)
-  istat_cublas = cublasDestroy(myblasHandle(i_batch))  
+  !istat_cublas = cublasDestroy(myblasHandle(i_batch))  
 #endif
   !
   CALL stop_clock( 'cegterg' ); !write(*,*) 'stop cegterg' ; FLUSH(6)
