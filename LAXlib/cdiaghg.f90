@@ -430,6 +430,7 @@ SUBROUTINE laxlib_cdiaghg_gpu( n, m, h_d, s_d, ldh, e_d, v_d, me_bgrp, root_bgrp
    e_orig_check = e_d(1:n)    
   print *, 'ORIGINAL cdiaghg_gpu e_d =', e_orig_check(1:5)
   !
+  print *, 'CUSOLVER THREAD: ', cusolver_thread
   CALL stop_clock_gpu( 'cdiaghg' )
   !
   RETURN
@@ -556,6 +557,8 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   INTEGER :: b, ik,ind_min !! M.Iovine - indices for eigenvectors ordering 
   COMPLEX(DP) :: minim !! M.Iovine - min. value for padding
   COMPLEX(DP) :: min_temp !! M.Iovine - temp variable for swapping of arrays for ordering eigenvalues and eigenvect
+  COMPLEX(DP), ALLOCATABLE :: s_orig_check(:,:) !! M.Iovine - added array to print overlap matrix for debugging!
+
   ! various work space
   !
   ! Temp arrays to save H and S.
@@ -564,8 +567,8 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   ATTRIBUTES( DEVICE ) :: work_d, rwork_d, h_diag_d, s_diag_d, d_info, arr_of_ptr_s_d, arr_of_ptr_h_d !!!! M.Iovine - added d_info and arr_of_ptr to the device attributes
   INTEGER                      :: devInfo_d, h_meig
   ATTRIBUTES( DEVICE )         :: devInfo_d
-  !TYPE(cusolverDnHandle), SAVE :: cuSolverHandle !M.Iovine - commented line
-  TYPE(cusolverDnHandle), SAVE :: cuSolverHandle_batched !! M.Iovine - we define a proper handle for the batched cdiaghg_gpu
+  TYPE(cusolverDnHandle), SAVE :: cuSolverHandle !M.Iovine - commented line
+  !TYPE(cusolverDnHandle), SAVE :: cuSolverHandle_batched !! M.Iovine - we define a proper handle for the batched cdiaghg_gpu
   TYPE(cublasHandle), SAVE :: cublasnHandle !! M.Iovine - we define a proper handle for cublas!  
   LOGICAL, SAVE                :: cuSolverInitialized = .FALSE.
   LOGICAL, SAVE                :: cublasInitialized = .FALSE. !! M.Iovine - variable declared for init. check of cublas
@@ -656,21 +659,21 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 #if defined(_OPENMP)
       IF (omp_get_num_threads() > 1) CALL lax_error__( ' cdiaghg_gpu ', 'cdiaghg_gpu is not thread-safe',  ABS( info ) )
 #endif
-      !IF ( .NOT. cusolver_initialized(cusolver_thread) ) THEN
-       ! info = cusolverDnCreate(cusolver_handle(cusolver_thread))
-        !IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnCreate',  ABS( info ) )
-        !cusolver_initialized(cusolver_thread) = .TRUE.
-        !info = cusolverDnSetStream(cusolver_handle(cusolver_thread), laxlib_cuda_stream )
-        !IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnSetStream',  ABS( info ) )   
-      !ENDIF
-      IF( .NOT. cuSolverInitialized ) THEN   !!! M.Iovine - we introduce a new Handle to avoid leaving changes to the next calls done
+      IF ( .NOT. cusolver_initialized(cusolver_thread) ) THEN
+        info = cusolverDnCreate(cusolver_handle(cusolver_thread))
+        IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnCreate',  ABS( info ) )
+        cusolver_initialized(cusolver_thread) = .TRUE.
+        info = cusolverDnSetStream(cusolver_handle(cusolver_thread), laxlib_cuda_stream )
+        IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnSetStream',  ABS( info ) )   
+      ENDIF
+      !IF( .NOT. cuSolverInitialized ) THEN   !!! M.Iovine - we introduce a new Handle to avoid leaving changes to the next calls done
                                                     !through the kernel calls inside the iterative loop!!
-        info = cusolverDnCreate(cuSolverHandle_batched)
-        IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnCreate',  ABS( info ) )
-         cuSolverInitialized = .TRUE.
-         info = cusolverDnSetStream(cuSolverHandle_batched, laxlib_cuda_stream) 
-         IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnSetStream',  ABS( info ) )
-      ENDIF 
+       !info = cusolverDnCreate(cuSolverHandle_batched)
+        !IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnCreate',  ABS( info ) )
+         !cuSolverInitialized = .TRUE.
+         !info = cusolverDnSetStream(cuSolverHandle_batched, laxlib_cuda_stream) 
+         !IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu_batched ', 'cusolverDnSetStream',  ABS( info ) )
+      !ENDIF 
       
       !!M.Iovine - added setstream and initialization check for cublas Handle:
       IF ( .NOT. cublas_initialized(cusolver_thread) ) THEN
@@ -691,6 +694,13 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
     !!! M.Iovine - we copy the c_devptr in the host array arr_of_ptr_s to the device array arr_of_ptr_s_d
     arr_of_ptr_s_d = arr_of_ptr_s
     
+    !!M.Iovine - added debugging lines:
+    IF (.NOT. ALLOCATED(s_orig_check)) ALLOCATE(s_orig_check(ldh, n))
+    s_orig_check = s_d(:,:,2)
+    print *, 'FIRST 2 elements of the diagonal of kth S : ', s_orig_check(1,1), s_orig_check(2,2)
+    print *, 'FIRST ROW OF kth S MATRIX : ', s_orig_check(1,:) 
+    !!! 
+
     
     !!!DEBUGG :
     istat_cublas = cudaGetLastError()
@@ -701,10 +711,18 @@ END IF
     !!!!
 
      
-    !cuSolverHandle = cusolver_handle(cusolver_thread) !!M.Iovine - this line must before any cuSolver routine kernel call!
+    cuSolverHandle = cusolver_handle(cusolver_thread) !!M.Iovine - this line must before any cuSolver routine kernel call!
     cublasnHandle = cublas_handle(cusolver_thread) !!M.Iovine - this line is introduced for cublas calls!
     
-    info = cusolverDnZpotrfBatched(cuSolverHandle_batched, CUBLAS_FILL_MODE_LOWER, n, arr_of_ptr_s_d, ldh, d_info(1), n_k)
+    !!!! M.Iovine - DEBUGG print of the overlap matrix to check it is positive definite:
+!    info = cudaMemcpy(s_host, s_d(:,:,2), ldh*n*sizeof(s_host(1,1)), cudaMemcpyDeviceToHost)     
+ !   print *, 'FIRST ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(1,1)
+ !   print *, 'SECOND ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(2,2), s_host(1,2), s_host(2,1), s_host(3,3)
+
+    !!!!
+
+
+    info = cusolverDnZpotrfBatched(cuSolverHandle, CUBLAS_FILL_MODE_LOWER, n, arr_of_ptr_s_d, ldh, d_info(1), n_k)
     IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnZpotrfBatched',  ABS( info ) )
     !!!!
     
@@ -716,6 +734,8 @@ END IF
     dinfo_host = d_info(1:n_k)
     print *, '[CHOLESKY d_info] per-batch status =', dinfo_host
     !!!!!
+    
+
 
 !!! DEBUGGING LINES:
 IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
@@ -800,7 +820,7 @@ print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
       !!!!
 
       !!!! M.Iovine - We change the routine from the single kernel call to the batched routine of NVIDIA Cusolver:
-      info = cusolverDnZheevjBatched_bufferSize(cuSolverHandle_batched, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, &
+      info = cusolverDnZheevjBatched_bufferSize(cuSolverHandle, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, &
                                                n, h_d, ldh, e_d, lwork_d, syevj_params, n_k)
       IF( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', ' cusolverDnZheevjBatched failed ', ABS( info ) )
       !
@@ -828,7 +848,7 @@ print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 
 
       !!!! M.Iovine - We change the routine from the single kernel call to the batched routine of NVIDIA Cusolver:
-      info = cusolverDnZheevjBatched(cuSolverHandle_batched, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, &
+      info = cusolverDnZheevjBatched(cuSolverHandle, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, &
       n, h_d, ldh, e_d, work_d, lwork_d, d_info(1), syevj_params, n_k)
       IF( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', ' cusolverDnZheevjBatched failed ', ABS( info ) )
      

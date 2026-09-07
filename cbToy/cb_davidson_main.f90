@@ -24,6 +24,7 @@ program cb_davidson_main
    logical, parameter :: gamma_only = .false. ! general k-point version
    complex(DP), allocatable :: evc(:,:), evc_batched(:,:,:) 
    real(dp), allocatable :: eig(:), eig_batched(:,:) 
+   
    integer, parameter :: npol=1
    integer :: dummy
    integer :: notcnv, dav_iter, nhpsi, n_k !! M.Iovine - added variable for storing the n. of elem. of the single batch
@@ -32,6 +33,12 @@ program cb_davidson_main
 ! additional local variables
    real(dp) :: ref=0.d0
    integer :: i_batch, ik
+   ! 
+   !M.Iovine - declaration of the 3d arrays for batched kernel calls:
+   COMPLEX(DP), ALLOCATABLE :: hc_c(:,:,:), sc_c(:,:,:), vc_c(:,:,:)
+   REAL(DP), ALLOCATABLE :: ew_c(:,:)
+   !INTEGER, ALLOCATABLE :: nbase_c(:) !M.Iovine - added for the PADDING!!
+   !
 #if defined(__MPI)
 ! local paralelization variables
    integer :: ndiag     ! input value of processors in the diagonalization group
@@ -94,13 +101,19 @@ program cb_davidson_main
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
    allocate( fft_array_batched(dfft%nnr, nk_batches), aux_batched(dfft%nnr, nk_batches) )
    allocate (evc(npwx, nbnd), eig(nbnd)) 
+   !!! M.Iovine - added allocation for 3d arrays:
+   allocate( hc_c(nbndx, nbndx, nk_batches) );
+   allocate( sc_c(nbndx, nbndx, nk_batches) );
+   allocate( vc_c(nbndx, nbndx, nk_batches) );
+   allocate( ew_c(nbndx, nk_batches) );
+   !!!
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
-
    do ik =1,nks, nk_batches
-     !! M.Iovine - we assign a value to the variable n_k:
+     !! M.Iovine - we assign a value to the variable n_k and allocate 3d arrays for batched kernel call:
      n_k = min(nk_batches, nks - ik +1)
+     !
      call start_clock('davidson')
-     !$omp parallel num_threads(nk_batches) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
+     !$omp parallel num_threads(nk_batches) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label )
      !$omp do
      do i_batch = 1, min(nk_batches, nks - ik +1) 
        !clock thread is declared threadprivate in the module 
@@ -119,21 +132,24 @@ program cb_davidson_main
        call init_random_wfcs(npw_batched(i_batch), npwx, nbnd, evc_batched(1,1,i_batch),i_batch)  
        !$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
        !$acc host_data use_device(eig_batched(1,i_batch))
+       !!$acc wait !!M.Iovine - added wait for NaN in multithreading
 #if defined(__INTERCALATE_CEGTERG)
        call omp_set_lock(cegterg_locker) 
 #endif
        call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), & 
-                      nhpsi_batched(i_batch), i_batch, n_k ) !!M.Iovine - added n_k as argument of the subroutine
+                      nhpsi_batched(i_batch), i_batch, nk_batches, hc_c, sc_c, vc_c, ew_c ) !!M.Iovine - added n_k as argument of the subroutine
+                                                                                     !!and added 3d arrays for batched kernel calls.
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
 #endif
+
      end do 
      !$omp end parallel 
      call stop_clock('davidson') 
-     ! !$omp barrier   !Remove
+     !!$omp barrier   !Remove 
      !$acc wait  
      !$acc update self(eig_batched) 
      ! Second loop: Process batches sequentially
@@ -151,7 +167,8 @@ program cb_davidson_main
         call write_bands(eig_batched(1,i_batch),ref)
         write (stdout,*) 'batch', i_batch, 'dav_iter, nhpsi, notcnv, ethr ', &
                          dav_iter_batched(i_batch), nhpsi_batched(i_batch), notcnv_batched(i_batch), ethr !Fixed
-     end do 
+
+     end do
    end do
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
@@ -162,6 +179,13 @@ program cb_davidson_main
    deallocate( fft_array_batched, aux_batched )
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
    
+   !!! M.Iovine - added allocation for 3d arrays:
+   deallocate( hc_c(nbndx, nbndx, nk_batches) );
+   deallocate( sc_c(nbndx, nbndx, nk_batches) );
+   deallocate( vc_c(nbndx, nbndx, nk_batches) );
+   deallocate( ew_c(nbndx, nk_batches) );
+   !!!
+
    call finalize_cublas_handles() !!M.Iovine - we destroy the Cublas handle initialiazed at the begin of the program
 
    call print_clock('davidson')
