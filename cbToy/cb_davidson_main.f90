@@ -37,7 +37,8 @@ program cb_davidson_main
    !M.Iovine - declaration of the 3d arrays for batched kernel calls:
    COMPLEX(DP), ALLOCATABLE :: hc_c(:,:,:), sc_c(:,:,:), vc_c(:,:,:)
    REAL(DP), ALLOCATABLE :: ew_c(:,:)
-   !INTEGER, ALLOCATABLE :: nbase_c(:) !M.Iovine - added for the PADDING!!
+   INTEGER, ALLOCATABLE :: nbase_c(:) !M.Iovine - added for the PADDING!!
+   INTEGER :: nbase_max !! M.Iovine - added shared nbase_max
    !
 #if defined(__MPI)
 ! local paralelization variables
@@ -106,11 +107,13 @@ program cb_davidson_main
    allocate( sc_c(nbndx, nbndx, nk_batches) );
    allocate( vc_c(nbndx, nbndx, nk_batches) );
    allocate( ew_c(nbndx, nk_batches) );
+   allocate( nbase_c(nk_batches) );
    !!!
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
+   !$acc enter data create(hc_c, sc_c, vc_c, ew_c, nbase_c) !M.Iovine - added enter data create of arrays for batched kernel calls
    do ik =1,nks, nk_batches
      !! M.Iovine - we assign a value to the variable n_k and allocate 3d arrays for batched kernel call:
-     n_k = min(nk_batches, nks - ik +1)
+     !n_k = min(nk_batches, nks - ik +1)
      !
      call start_clock('davidson')
      !$omp parallel num_threads(nk_batches) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label )
@@ -131,16 +134,16 @@ program cb_davidson_main
        !$acc update device(igk_batched(:,i_batch)) async(clock_thread)
        call init_random_wfcs(npw_batched(i_batch), npwx, nbnd, evc_batched(1,1,i_batch),i_batch)  
        !$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
-       !$acc host_data use_device(eig_batched(1,i_batch))
-       !!$acc wait !!M.Iovine - added wait for NaN in multithreading
+       !$acc host_data use_device(eig_batched(1,i_batch), hc_c, sc_c, vc_c, ew_c) !M.Iovine - added the arrays for batched kernel calls
 #if defined(__INTERCALATE_CEGTERG)
        call omp_set_lock(cegterg_locker) 
 #endif
        call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), & 
-                      nhpsi_batched(i_batch), i_batch, nk_batches, hc_c, sc_c, vc_c, ew_c ) !!M.Iovine - added n_k as argument of the subroutine
-                                                                                     !!and added 3d arrays for batched kernel calls.
+                      nhpsi_batched(i_batch), i_batch, nk_batches, hc_c, sc_c, vc_c, ew_c, nbase_c, nbase_max ) !!M.Iovine - added n_k as argument 
+                                                                                                                !!of the subroutine and added 3d 
+                                                                                                                !!arrays for batched kernel calls.
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -173,6 +176,7 @@ program cb_davidson_main
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc) 
+   !$acc exit data delete(hc_c, sc_c, vc_c, ew_c) !M.Iovine - added exit data delete for arrays created for batched kernel calls 
    deallocate( eig )
    deallocate( evc )
    deallocate( evc_batched, eig_batched )
@@ -180,10 +184,11 @@ program cb_davidson_main
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
    
    !!! M.Iovine - added allocation for 3d arrays:
-   deallocate( hc_c(nbndx, nbndx, nk_batches) );
-   deallocate( sc_c(nbndx, nbndx, nk_batches) );
-   deallocate( vc_c(nbndx, nbndx, nk_batches) );
-   deallocate( ew_c(nbndx, nk_batches) );
+   deallocate( hc_c );
+   deallocate( sc_c );
+   deallocate( vc_c );
+   deallocate( ew_c );
+   deallocate( nbase_c );
    !!!
 
    call finalize_cublas_handles() !!M.Iovine - we destroy the Cublas handle initialiazed at the begin of the program

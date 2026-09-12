@@ -558,7 +558,7 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   COMPLEX(DP) :: minim !! M.Iovine - min. value for padding
   COMPLEX(DP) :: min_temp !! M.Iovine - temp variable for swapping of arrays for ordering eigenvalues and eigenvect
   COMPLEX(DP), ALLOCATABLE :: s_orig_check(:,:) !! M.Iovine - added array to print overlap matrix for debugging!
-
+  COMPLEX(DP) :: s_host(ldh, n) !!M.Iovine - added for degugging!!!
   ! various work space
   !
   ! Temp arrays to save H and S.
@@ -581,16 +581,16 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   TYPE(cusolverDnSyevjInfo) :: syevj_params
 
   !! M.Iovine - we define the variables for the cublas handle:
-  !INTEGER(kind=cuda_stream_kind) :: mycudaStream
-  !type(cublasHandle) :: cublas_handle
+  INTEGER(kind=cuda_stream_kind) :: mycudaStream
+  type(cublasHandle) :: cublas_handle1
   INTEGER :: istat_cublas
 
 #endif
   INTEGER :: i, j, k !!!! M.IOvine - added index k for the third dimension of the arrays
-  !mycudaStream = laxlib_cuda_stream
-  !istat_cublas = cublasCreate(cublas_handle) !!! M.Iovine - introduced cublas handle
-  !istat_cublas = cublasSetStream(cublas_handle, mycudaStream) !!!M.IOvine - COMMENTED TO DEBUGG!!
-  !IF (istat_cublas /= 0) CALL lax_error__( ' cdiaghg_gpu ', 'cublasSetStream', ABS(istat_cublas) ) 
+  mycudaStream = laxlib_cuda_stream
+  istat_cublas = cublasCreate(cublas_handle1) !!! M.Iovine - introduced cublas handle
+  istat_cublas = cublasSetStream(cublas_handle1, mycudaStream) !!!M.IOvine - COMMENTED TO DEBUGG!!
+  IF (istat_cublas /= 0) CALL lax_error__( ' cdiaghg_gpu ', 'cublasSetStream', ABS(istat_cublas) ) 
 #undef VARTYPE
 
   !
@@ -643,17 +643,17 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
       ENDDO
       !i
 !!!!DEBUG LINES:
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+!                                        inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+!         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
 #if defined(_OPENMP)
@@ -676,13 +676,27 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
       !ENDIF 
       
       !!M.Iovine - added setstream and initialization check for cublas Handle:
-      IF ( .NOT. cublas_initialized(cusolver_thread) ) THEN
-           info = cublasCreate(cublas_handle(cusolver_thread))
-           IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasCreate',  ABS( info ) )
-           cublas_initialized(cusolver_thread) = .TRUE.
-           info = cublasSetStream(cublas_handle(cusolver_thread), laxlib_cuda_stream )
-           IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnSetStream',  ABS( info ) )
-      ENDIF
+      !IF ( .NOT. cublas_initialized(cusolver_thread) ) THEN
+       !    info = cublasCreate(cublas_handle(cusolver_thread))
+        !   IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasCreate',  ABS( info ) )
+        !   cublas_initialized(cusolver_thread) = .TRUE.
+        !   info = cublasSetStream(cublas_handle(cusolver_thread), laxlib_cuda_stream )
+        !   IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnSetStream',  ABS( info ) )
+      !ENDIF
+
+    !info = cudaDeviceSynchronize()
+    
+
+
+    !M.Iovine - we try to add a small shift to the diagonal :
+    !$cuf kernel do(2) <<<*,*,0,laxlib_cuda_stream>>>
+    do k = 1, n_k
+        do i = 1, n
+            s_d(i, i, k) = s_d(i, i, k) + 1.0e-8_dp
+        end do
+    end do
+
+   info = cudaDeviceSynchronize()
 
 
     !!!! M.Iovine - Cholesky factorization of the s overlap matrix:
@@ -695,32 +709,45 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
     arr_of_ptr_s_d = arr_of_ptr_s
     
     !!M.Iovine - added debugging lines:
-    IF (.NOT. ALLOCATED(s_orig_check)) ALLOCATE(s_orig_check(ldh, n))
-    s_orig_check = s_d(:,:,2)
-    print *, 'FIRST 2 elements of the diagonal of kth S : ', s_orig_check(1,1), s_orig_check(2,2)
-    print *, 'FIRST ROW OF kth S MATRIX : ', s_orig_check(1,:) 
+    !IF (.NOT. ALLOCATED(s_orig_check)) ALLOCATE(s_orig_check(ldh, n))
+    !s_orig_check = s_d(:,:,2)
+    !print *, 'FIRST 2 elements of the diagonal of kth S : ', s_orig_check(1,1), s_orig_check(2,2)
+    !print *, 'FIRST ROW OF kth S MATRIX : ', s_orig_check(1,:) 
     !!! 
 
     
     !!!DEBUGG :
-    istat_cublas = cudaGetLastError()
-IF (istat_cublas /= 0) THEN
-   print *, 'STICKY CUDA ERROR before ZpotrfBatched: ', &
-             cudaGetErrorString(istat_cublas)
-END IF
+    !istat_cublas = cudaGetLastError()
+!IF (istat_cublas /= 0) THEN
+ !  print *, 'STICKY CUDA ERROR before ZpotrfBatched: ', &
+  !           cudaGetErrorString(istat_cublas)
+!END IF
     !!!!
-
+    
+    !info = cudaDeviceSynchronize()
      
     cuSolverHandle = cusolver_handle(cusolver_thread) !!M.Iovine - this line must before any cuSolver routine kernel call!
-    cublasnHandle = cublas_handle(cusolver_thread) !!M.Iovine - this line is introduced for cublas calls!
+    !cublasnHandle = cublas_handle(cusolver_thread) !!M.Iovine - this line is introduced for cublas calls!
     
     !!!! M.Iovine - DEBUGG print of the overlap matrix to check it is positive definite:
-!    info = cudaMemcpy(s_host, s_d(:,:,2), ldh*n*sizeof(s_host(1,1)), cudaMemcpyDeviceToHost)     
- !   print *, 'FIRST ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(1,1)
- !   print *, 'SECOND ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(2,2), s_host(1,2), s_host(2,1), s_host(3,3)
+    !info = cudaMemcpy(s_host, s_d(:,:,1), ldh*n*sizeof(s_host(1,1)), cudaMemcpyDeviceToHost)     
+    !print *, 'FIRST ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(1,1)
+    !print *, 'SECOND ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(2,2), s_host(1,2), s_host(2,1), s_host(3,3)
 
     !!!!
 
+
+
+    ! Direct assignment triggers automatic device-to-host transfer
+!s_host = s_d(:,:,2)
+
+!print *, 'FIRST ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(1,1)
+!print *, 'SECOND ELEMENTS OF THE K-TH MATRIX PASSED TO SOLVER: ', s_host(2,2), s_host(1,2), s_host(2,1), s_host(3,3)
+
+
+
+    
+    info = cudaDeviceSynchronize()
 
     info = cusolverDnZpotrfBatched(cuSolverHandle, CUBLAS_FILL_MODE_LOWER, n, arr_of_ptr_s_d, ldh, d_info(1), n_k)
     IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnZpotrfBatched',  ABS( info ) )
@@ -738,17 +765,17 @@ END IF
 
 
 !!! DEBUGGING LINES:
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+ !                                       inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!print *, '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+ !        ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
     !! We assign to each element of arr_of_ptr the device pointer to each 2D slice in h_d :
@@ -762,50 +789,50 @@ print *, '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 
     !!!!M.Iovine - triagular pre and post multiplication of Hamiltonian:
     !! Ly = H :
-    info = cublasZtrsmBatched(cublasnHandle, CUBLAS_SIDE_LEFT, &
+    info = cublasZtrsmBatched(cublas_handle1, CUBLAS_SIDE_LEFT, &
            CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-LEFT',  ABS( info ) )
 
-    info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
+    !info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang left', ABS(info))
 
 !!! DEBUGGING LINES
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+  !                                      inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!print *, '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+!         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
     !! y = w L(conj. transpose) :
-    info = cublasZtrsmBatched(cublasnHandle, CUBLAS_SIDE_RIGHT, &
+    info = cublasZtrsmBatched(cublas_handle1, CUBLAS_SIDE_RIGHT, &
            CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_C, CUBLAS_DIAG_NON_UNIT, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)    
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-RIGT',  ABS( info ) )
       !
     
-    info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
+    !info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang right', ABS(info))
 
 !!! DEBUGGING LINES:
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+ !                                       inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+ !        ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 
       !!!! M.Iovine - we define the parameters for the Jacobi algorithm corresponding to the diagonalization done through the batched cuSolver routine:
@@ -836,39 +863,40 @@ print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 #endif
       !
       !! Debugging lines:
-      IF (.NOT. ALLOCATED(h_sym_chk)) ALLOCATE(h_sym_chk(n,n))
-        h_sym_chk = h_d(1:n,1:n,1)
-        max_asym = 0.0_DP
-        DO jj_sym = 1, n
-        DO ii_sym = 1, jj_sym-1
-                max_asym = MAX(max_asym, ABS(h_sym_chk(ii_sym,jj_sym) - CONJG(h_sym_chk(jj_sym,ii_sym))))
-          END DO
-        END DO
-        print *, '[SYM CHECK] max Hermitian asymmetry in h_d before eigensolver =', max_asym
+      !IF (.NOT. ALLOCATED(h_sym_chk)) ALLOCATE(h_sym_chk(n,n))
+       ! h_sym_chk = h_d(1:n,1:n,1)
+        !max_asym = 0.0_DP
+        !DO jj_sym = 1, n
+        !DO ii_sym = 1, jj_sym-1
+         !       max_asym = MAX(max_asym, ABS(h_sym_chk(ii_sym,jj_sym) - CONJG(h_sym_chk(jj_sym,ii_sym))))
+          !END DO
+        !END DO
+        !print *, '[SYM CHECK] max Hermitian asymmetry in h_d before eigensolver =', max_asym
 
+      info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
 
       !!!! M.Iovine - We change the routine from the single kernel call to the batched routine of NVIDIA Cusolver:
       info = cusolverDnZheevjBatched(cuSolverHandle, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, &
       n, h_d, ldh, e_d, work_d, lwork_d, d_info(1), syevj_params, n_k)
       IF( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', ' cusolverDnZheevjBatched failed ', ABS( info ) )
      
-     info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
-    IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after batched diag.', ABS(info))
+      info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
+    !IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after batched diag.', ABS(info))
     dinfo_host = d_info(1:n_k)
     print *, '[DIAG CUSOLVER CHECK NEW d_info] per-batch status =', dinfo_host
 
      !!! DEBUGGING LINES: 
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+  !                                      inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!print *, '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+ !        ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 
       !! M.Iovine - we destroy the SyevjInfo object:
@@ -885,34 +913,34 @@ print *, '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
 
     !!!! M.Iovine : we need to take into account the fact that the eigenvalues got after the factorization and the triangular matrix mult. are the same of the initial problem, but this is not true for the eigenvectors, so we need to solve a triangular system to get the effective eigenvectors:
     !! M.Iovine : it is important to observe that the current eigenvectors are stored in the h_d matrix: h_d = L(conj. transpose) * eigvect
-    info = cublasZtrsmBatched(cublasnHandle, CUBLAS_SIDE_LEFT, &
+    info = cublasZtrsmBatched(cublas_handle1, CUBLAS_SIDE_LEFT, &
            CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_C, CUBLAS_DIAG_NON_UNIT, &
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-eigenvectors',  ABS( info ) )
    
-   info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
+   !info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang final', ABS(info))
 
    !!! DEBUGGING LINES:   
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[6] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+   !                                     inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!print *, '[6] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+ !        ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 IF (.NOT. ALLOCATED(nan_echk)) ALLOCATE(nan_echk(n), nan_emask(n))
 info = cudaDeviceSynchronize()
 IF (info /= 0) CALL lax_error__('cdiaghg_gpu', &
                                  'sync before reading e_d', ABS(info))
-nan_echk = e_d(1:n,1)
-nan_emask = ieee_is_nan(nan_echk)
-print *, '[E] e_d has_nan =', ANY(nan_emask), ' first vals =', nan_echk(1:5)
+!nan_echk = e_d(1:n,1)
+!nan_emask = ieee_is_nan(nan_echk)
+!print *, '[E] e_d has_nan =', ANY(nan_emask), ' first vals =', nan_echk(1:5)
 
     !!!! M.Iovine - We need to order in acending way the eigenvalues
     !!!! and the corresponding eigenvectors:
@@ -987,17 +1015,17 @@ info = cudaDeviceSynchronize()
       !
 
  !!! DEBUGGING LINES:   
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = v_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+ !                                       inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = v_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!print *, '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+ !        ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
       
       
       

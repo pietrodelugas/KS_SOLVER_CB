@@ -20,8 +20,9 @@
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
-                    n_k, hc_comp, sc_comp, vc_comp, ew_comp ) !M.Iovine - added 3d arrays and ew 2d for batched kernel calls and n_k
-                                                                          !M.Iovine - added nbase_max for padding 
+                    n_k, hc_comp, sc_comp, vc_comp, ew_comp, nbase_comp, nbase_max ) !M.Iovine - added 3d arrays and ew 2d for batched 
+                                                                                     !kernel calls and n_k
+                                                                                     !M.Iovine - added nbase_max for padding 
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -87,8 +88,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   INTEGER, INTENT(IN) :: n_k
   !M.Iovine - added 3d arrays and 2d ew array for batched kernel call:
   COMPLEX(DP), INTENT(INOUT) :: hc_comp(nvecx,nvecx,n_k), sc_comp(nvecx,nvecx,n_k), vc_comp(nvecx,nvecx,n_k)
+  !$acc declare device_resident(hc_comp, sc_comp, vc_comp) !! We add the device resident declaration!
   REAL(DP), INTENT(INOUT) :: ew_comp(nvecx,n_k)
-  !INTEGER, INTENT(INOUT) :: nbase_comp(n_k) !M.Iovine - introduced for the PADDING
+  !$acc declare device_resident(ew_comp)
+  INTEGER, INTENT(INOUT) :: nbase_comp(n_k) !M.Iovine - introduced for the PADDING
+  INTEGER, INTENT(INOUT) :: nbase_max !M.Iovine - introduced for the PADDING
   !
   ! ... LOCAL variables
   !
@@ -146,7 +150,7 @@ REAL(DP)    :: e1_chk
 COMPLEX(DP), ALLOCATABLE :: vc_check(:,:) !!M.Iovine - debugging line
 COMPLEX(DP), ALLOCATABLE :: ew_check(:) !!M.Iovine - debugging line
 REAL(DP) :: e_check(nvec) !!M.Iovine - debugging line
-INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING 
+!INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING 
 #if defined(__CUDA)
   type(cublasHandle) :: myblasHandle(20) 
   INTEGER :: istat_cublas
@@ -172,25 +176,25 @@ INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING
   ! Setup GPU stream using clock_thread (Fixed)
   async_id = clock_thread
 
-!#if defined(__CUDA)
+#if defined(__CUDA)
   ! Get cuda stream and link cublas to it
-  !mycudaStream = clock_cuda_stream
-  !istat_cublas = cublasCreate(myblasHandle(i_batch))
-  !istat_cublas = cublasSetStream(myblasHandle(i_batch), mycudaStream)
-!#endif
- 
+  mycudaStream = clock_cuda_stream
+  istat_cublas = cublasCreate(myblasHandle(i_batch))
+  istat_cublas = cublasSetStream(myblasHandle(i_batch), mycudaStream)
+#endif
+  
   !!M.Iovine - added setstream and initialization check for cublas Handle:
-  IF ( .NOT. cublas_initialized(clock_thread) ) THEN
-        info = cublasCreate(cublas_handle(i_batch))
-        IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cegterg_cublas ', 'cublasCreate',  ABS( info ) )
-        cublas_initialized(clock_thread) = .TRUE.
+  !IF ( .NOT. cublas_initialized(clock_thread) ) THEN
+   !     info = cublasCreate(cublas_handle(i_batch))
+    !    IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cegterg_cublas ', 'cublasCreate',  ABS( info ) )
+   !     cublas_initialized(clock_thread) = .TRUE.
         
-        print '("cegterg thread check: i_batch=",I3," clock_thread=",I3," omp_tid=",I3," laxlib_cuda_stream=",I24)', &
-             i_batch, clock_thread, omp_get_thread_num(), laxlib_cuda_stream
+   !     print '("cegterg thread check: i_batch=",I3," clock_thread=",I3," omp_tid=",I3," laxlib_cuda_stream=",I24)', &
+    !         i_batch, clock_thread, omp_get_thread_num(), laxlib_cuda_stream
 
-        info = cublasSetStream(cublas_handle(i_batch), laxlib_cuda_stream )
-        IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cegterg_cublas ', 'cublasDnSetStream',  ABS( info ) )
-  ENDIF
+    !    info = cublasSetStream(cublas_handle(i_batch), laxlib_cuda_stream )
+     !   IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cegterg_cublas ', 'cublasDnSetStream',  ABS( info ) )
+  !ENDIF
   
   
   
@@ -358,16 +362,34 @@ INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING
      !
      ! ... diagonalize the reduced hamiltonian
      !
+     !
      !$acc host_data use_device(hc, sc, vc, ew)
      CALL start_clock( 'cegterg:diag' )
      !call omp_set_lock(cegterg_locker) 
      
-     !!$acc wait ! Commented for test 7
-     !!$omp barrier !Test 6
+     !!$omp barrier !Test 6 --ADDED BARRIER!
      
-     !$omp single
-     !$acc enter data create(hc_comp, sc_comp, vc_comp, ew_comp)
-     !$omp end single
+     !!$omp single
+     !!$acc enter data create(hc_comp, sc_comp, vc_comp, ew_comp)
+     !!$omp end single
+     
+     !!$acc enter data create(nbase_comp)
+
+     !nbase_comp(i_batch) = nbase !! Added assignment to the shared array of nbase values across all threads!
+     
+     !!$omp barrier !!! Added barrier for nbase_comp element to be all populated by all threads!!
+     
+     !!$acc update self(nbase_comp) !!M.Iovine - added self update to copy the computed values to the host!!
+
+     !!$omp single
+     !nbase_max = maxval(nbase_comp)
+     !print '("NBASE_COMP DUMP: i_batch=",I3," nbase_comp=",10I6," nbase_max=",I6)', &
+      ! i_batch, nbase_comp, nbase_max
+     !!$omp end single
+
+     !PRINT *, 'NBASE_MAX : ', nbase_max
+
+     !!$acc wait !M.Iovine added wait
 
      IF( my_bgrp_id == root_bgrp_id ) THEN
         !M.Iovine - added for the padding:
@@ -380,48 +402,54 @@ INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING
         !vc_comp = CMPLX(0.D0,0.D0,kind=DP)
         !!$acc end kernels
         !!!!
+        
+        !!$acc wait
+        
+        !call omp_set_lock(cegterg_locker)
 
         !$acc kernels async(async_id)
         vc_comp(:,:,i_batch) = vc(:,:)
         hc_comp(:,:,i_batch) = hc(:,:)
         sc_comp(:,:,i_batch) = sc(:,:)
         !$acc end kernels
-        
+       
+
         !!!M.Iovine - for each thread, we write the corresponding matricesin the batched arrays and we add the Padding:
         !nbase_comp(i_batch) = nbase
         !!$omp barrier
         !!$acc wait
         !nbase_max = maxval(nbase_comp)
         
+        !!$omp barrier
+
         !if (nbase < nbase_max) then
            !!! We find the maximum element of the nbasexnbase arrays:
            !maxv_hc = maxval(abs(hc_batched(1:nbase,1:nbase,i_batch)))
-           do i=(nbase+1), nvecx
-              !$acc kernels async(async_id)
-              !hc_comp(:,i:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-              !hc_comp(i:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-              !sc_comp(:,i:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-              !sc_comp(i:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-              !vc_comp(:,i:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-              !vc_comp(i:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+           !$acc kernels async(async_id) 
+           do i=(nbase+1), nbase_max
+              !!$acc kernels async(async_id)
+              hc_comp(:,i:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+              hc_comp(i:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+              sc_comp(:,i:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+              sc_comp(i:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+              vc_comp(:,i:nbase_max,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+              vc_comp(i:nbase_max,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
            !Diagonal elements (we base them on the maximum element of the reduced matrices --> we multiply for 10^5 for faster convergence
               hc_comp(i,i,i_batch) = CMPLX(i*1e3,0.D0,kind=DP)
               sc_comp(i,i,i_batch) = CMPLX(1.D0,0.D0,kind=DP)
               vc_comp(i,i,i_batch) = CMPLX(1.D0,0.D0,kind=DP)
-              !$acc end kernels
+              !!$acc end kernels
            end do
+           !$acc end kernels
            !print *, 'I am inside the Padding loop'
         !end if
         !!! M.Iovine - Added padding
         
-        !call omp_unset_lock(cegterg_locker) !!! M.Iovine - added for NaN problem and seg fault for nk_batched > 2
-
-        !!$acc wait(async_id) !! Old test 1 !! Commented for new test PADDING 3
-        !!$acc wait !! New test PADDING 3
-        
         !$omp barrier
-        
+        !!$acc wait async(async_id) !!M.Iovine - added wait - DEFINITIVE TEST PERFORMD BY ADDING A WAIT BEFORE AND AFTER THE DIAGHG
+
         print *, 'ATTENTION! NBASE : ', nbase
+
 
         !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp)
         print *, 'Thread that executes the kernel batched API call: ', i_batch
@@ -429,40 +457,38 @@ INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING
         CALL diaghg( nbase, nvec, hc_comp, sc_comp, nvecx, ew_comp, vc_comp, n_k, me_bgrp, root_bgrp, intra_bgrp_comm )
         !$omp end single ! Added for test 11
         !$acc end host_data
-
+        
         print *, 'DEBUG threads :', i_batch !!DEBUGGING LINE!!!
 
         !!$omp barrier ! Commented for test 10
-        !$acc wait ! Commented for test 8
+        !$acc wait ! Commented for test 8 - DEFINITIVE TEST PERFORMD BY ADDING A WAIT BEFORE AND AFTER THE DIAGHG
         !!$acc wait(async_id) !Test 9
-
-        !call omp_set_lock(cegterg_locker) !!! M.Iovine - added for NaN problem and seg fault for nk_batched > 2
-
-        !$acc kernels async(async_id)
+        
+        !$acc kernels async(async_id) 
         vc(:,:) = vc_comp(:,:,i_batch)
         hc(:,:) = hc_comp(:,:,i_batch)
         sc(:,:) = sc_comp(:,:,i_batch)
         ew(:) = ew_comp(:,i_batch)
         !$acc end kernels
-        
+
         !!$omp barrier ! Test 5
         !!$acc wait ! Test 5
         
-        !call omp_unset_lock(cegterg_locker) !!! M.Iovine - added for NaN problem and seg fault for nk_batched > 2
-
         print *, 'DEBUG threads AFTER data copied back:', i_batch !!DEBUGGING LINE!!!
-
-        !!$acc exit data delete(hc_comp,sc_comp,vc_comp,ew_comp)
 
      END IF
      !$acc wait(async_id) ! All the tests
+     !!$omp barrier !ADDED barrier !!
+     !!$acc wait  !- DEFINITIVE TEST PERFORMD BY ADDING A WAIT BEFORE AND AFTER THE DIAGHG
+
+     !!$omp single
+     !!$acc exit data delete(hc_comp,sc_comp,vc_comp,ew_comp) !Test 13 - exit deplaced outside the IF statement!
+     !!$omp end single
      
-     !$omp single
-     !$acc exit data delete(hc_comp,sc_comp,vc_comp,ew_comp) !Test 13 - exit deplaced outside the IF statement!
-     !$omp end single
+     !!$acc wait ! M.Iovine - added wait
+   
 
    !!!!!
-     !call omp_unset_lock(cegterg_locker)
      IF( nbgrp > 1 ) THEN
         CALL mp_bcast( vc, root_bgrp_id, inter_bgrp_comm )
         CALL mp_bcast( ew, root_bgrp_id, inter_bgrp_comm )
@@ -472,8 +498,7 @@ INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING
      CALL dev_memcpy_async(e, ew, mycudaStream, (/ 1, nvec /), 1 )
      !$acc end host_data
      !
-     !!$acc wait !!FINAL DEBUGGING LINE!!! 
-
+     !!$acc wait !M.Iovine - commented final - test final
  END IF
   !
   ! ... iterate
@@ -848,6 +873,7 @@ INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING
   END DO iterate
   !
   !$acc exit data delete(ew) async(async_id) 
+  !!$acc exit data delete(nbase_comp) !M.Iovine - added delete for nbase_comp
   DEALLOCATE( recv_counts )
   DEALLOCATE( displs )
   DEALLOCATE( conv )
@@ -868,7 +894,7 @@ INTEGER :: nbase_max !!M.Iovine - variable introduced for PADDING
   !$acc end data 
   ! Cleanup (Fixed)
 #if defined(__CUDA)
-  !istat_cublas = cublasDestroy(myblasHandle(i_batch))  
+  istat_cublas = cublasDestroy(myblasHandle(i_batch))  
 #endif
   !
   CALL stop_clock( 'cegterg' ); !write(*,*) 'stop cegterg' ; FLUSH(6)
