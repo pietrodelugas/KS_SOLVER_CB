@@ -12,7 +12,8 @@ program cb_davidson_main
    use omp_lib,               only: omp_get_thread_num, omp_set_lock, omp_unset_lock, omp_init_lock
 #if defined(__CUDA)
    use openacc,               only: acc_get_cuda_stream
-   use laxlib_cusolver_handles, ONLY : initialize_cusolver_handles, initialize_laxlib_cuda_stream
+   use laxlib_cusolver_handles, ONLY : initialize_cusolver_handles, initialize_laxlib_cuda_stream, &
+                                       initialize_cublas_handles, finalize_cublas_handles
 #endif
    !!use nvpl_lapack,         only: nvpl_lapack_set_num_threads
    implicit none
@@ -30,7 +31,12 @@ program cb_davidson_main
    logical :: overlap = .false. , lrot =.false.
 ! additional local variables
    real(dp) :: ref=0.d0
-   integer :: i_batch, ik
+   integer :: i_batch, ik, n_k
+   ! shared, batch-wide work arrays used by cegterg to solve the very first
+   ! reduced-Hamiltonian diagonalization of the whole batch with a single
+   ! batched cuSOLVER call
+   COMPLEX(DP), ALLOCATABLE :: hc_c(:,:,:), sc_c(:,:,:), vc_c(:,:,:)
+   REAL(DP), ALLOCATABLE :: ew_c(:,:)
 #if defined(__MPI)
 ! local paralelization variables
    integer :: ndiag     ! input value of processors in the diagonalization group
@@ -62,7 +68,8 @@ program cb_davidson_main
 
    call input(gamma_only)
    print *, 'Running cb_davidson_main with the following parameters:'
-   call initialize_cusolver_handles(nk_batches) 
+   call initialize_cusolver_handles(nk_batches)
+   call initialize_cublas_handles(nk_batches)
    print *, 'nk_batches = ', nk_batches
    !$omp parallel num_threads(nk_batches) default(shared)  shared(t0cpu, nclock, clock_label) 
    call init_clocks(.true.)
@@ -91,14 +98,27 @@ program cb_davidson_main
 
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
    allocate( fft_array_batched(dfft%nnr, nk_batches), aux_batched(dfft%nnr, nk_batches) )
-   allocate (evc(npwx, nbnd), eig(nbnd)) 
+   allocate (evc(npwx, nbnd), eig(nbnd))
+   ! leading dimension is nbnd (not nbndx): this very first diagonalization
+   ! always has nbase == nbnd (no subspace growth yet), and the batched
+   ! cuSOLVER eigensolver only supports a leading dimension equal to the
+   ! matrix size for this call
+   allocate( hc_c(nbnd, nbnd, nk_batches), sc_c(nbnd, nbnd, nk_batches), vc_c(nbnd, nbnd, nk_batches) )
+   allocate( ew_c(nbnd, nk_batches) )
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
+   !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
 
    do ik =1,nks, nk_batches
+     ! actual number of k-points in this batch: may be less than nk_batches
+     ! for the last, partial batch when nk_batches does not divide nks; the
+     ! OMP team below is sized to match, since the batched diagonalization
+     ! inside cegterg needs every thread of the team to be an active
+     ! participant in its "!$omp barrier"/"!$omp single" synchronization
+     n_k = min(nk_batches, nks - ik +1)
      call start_clock('davidson')
-     !$omp parallel num_threads(nk_batches) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label) 
+     !$omp parallel num_threads(n_k) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
      !$omp do
-     do i_batch = 1, min(nk_batches, nks - ik +1) 
+     do i_batch = 1, n_k
        !clock thread is declared threadprivate in the module 
        clock_thread = i_batch 
 
@@ -120,8 +140,8 @@ program cb_davidson_main
 #endif
        call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
-                      eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), & 
-                      nhpsi_batched(i_batch), i_batch )
+                      eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
+                      nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -151,12 +171,17 @@ program cb_davidson_main
    end do
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
-   !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc) 
+   !$acc exit data delete(hc_c, sc_c, vc_c, ew_c)
+   !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
    deallocate( eig )
    deallocate( evc )
    deallocate( evc_batched, eig_batched )
    deallocate( fft_array_batched, aux_batched )
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
+   deallocate( hc_c, sc_c, vc_c, ew_c )
+
+   call finalize_cublas_handles()
+
    call print_clock('davidson')
 
    call print_clock( 'cegterg' )

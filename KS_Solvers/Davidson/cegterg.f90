@@ -19,7 +19,8 @@
 !----------------------------------------------------------------------------
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
-                    e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch )
+                    e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
+                    n_k, hc_comp, sc_comp, vc_comp, ew_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -78,6 +79,26 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! number of unconverged roots
   INTEGER, INTENT(OUT) :: nhpsi
     ! total number of individual hpsi
+  !
+  INTEGER, INTENT(IN) :: n_k
+    ! number of k-points (batch entries) in the current batch: this is the
+    ! actual size of the shared work arrays below, used to solve the very
+    ! first reduced-Hamiltonian diagonalization of the whole batch with a
+    ! single batched cuSOLVER call (see the "ELSE" branch of "IF (lrot)"
+    ! below); the diagonalization inside the main iterative loop further
+    ! down is untouched and still solved independently by each thread
+    !
+    ! NOTE: these are sized (nvec,nvec,n_k), i.e. with leading dimension
+    ! exactly nvec -- not (nvecx,nvecx,n_k) -- because this very first
+    ! diagonalization always has nbase == nvec (no subspace growth has
+    ! happened yet), and the batched cuSOLVER eigensolver only supports a
+    ! leading dimension equal to the matrix size for this call
+  COMPLEX(DP), INTENT(INOUT) :: hc_comp(nvec,nvec,n_k), sc_comp(nvec,nvec,n_k), vc_comp(nvec,nvec,n_k)
+    ! shared, batch-wide reduced Hamiltonian/overlap/eigenvector work arrays;
+    ! slice (:,:,i_batch) belongs to this thread, the rest to the other
+    ! threads solving the other k-points of the current batch
+  REAL(DP), INTENT(INOUT) :: ew_comp(nvec,n_k)
+    ! shared, batch-wide reduced eigenvalues, one column per k-point
   !
   ! ... LOCAL variables
   !
@@ -314,20 +335,51 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !
      ! ... diagonalize the reduced hamiltonian
      !
-     !$acc host_data use_device(hc, sc, vc, ew)
      CALL start_clock( 'cegterg:diag' )
-     call omp_set_lock(cegterg_locker) 
+     !
+     ! ... this is the very first diagonalization (nbase == nvec here, the
+     ! ... same for every k-point of the batch, since no subspace growth has
+     ! ... happened yet): stage this thread's (i_batch's) reduced
+     ! ... Hamiltonian/overlap into its slice of the shared, batch-wide work
+     ! ... arrays (already mapped onto the device once, in cb_davidson_main,
+     ! ... before any thread was spawned)...
+     !
+     !$acc kernels async(async_id)
+     hc_comp(:,:,i_batch) = hc(1:nvec,1:nvec)
+     sc_comp(:,:,i_batch) = sc(1:nvec,1:nvec)
+     !$acc end kernels
+     !$acc wait(async_id)
+     !
+     !$omp barrier
+     !
+     ! ... and let a single thread solve the whole batch with one call into
+     ! ... the batched cuSOLVER generalized eigensolver
+     !
      IF( my_bgrp_id == root_bgrp_id ) THEN
-        CALL diaghg( nbase, nvec, hc, sc, nvecx, ew, vc, me_bgrp, root_bgrp, intra_bgrp_comm )
+        !$omp single
+        !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp)
+        CALL diaghg( nbase, nvec, hc_comp, sc_comp, nvec, ew_comp, vc_comp, n_k, me_bgrp, root_bgrp, intra_bgrp_comm )
+        !$acc end host_data
+        !$omp end single
      END IF
-     !$acc wait(async_id) 
-     call omp_unset_lock(cegterg_locker)
+     !
+     ! ... retrieve this thread's (i_batch's) eigenvectors/eigenvalues back
+     !
+     !$acc kernels async(async_id)
+     vc(1:nvec,1:nvec) = vc_comp(:,:,i_batch)
+     ew(1:nvec)        = ew_comp(:,i_batch)
+     !$acc end kernels
+     !$acc wait(async_id)
+     !
+     !$omp barrier
+     !
      IF( nbgrp > 1 ) THEN
         CALL mp_bcast( vc, root_bgrp_id, inter_bgrp_comm )
         CALL mp_bcast( ew, root_bgrp_id, inter_bgrp_comm )
      ENDIF
      CALL stop_clock( 'cegterg:diag' )
      !
+     !$acc host_data use_device(ew)
      CALL dev_memcpy_async(e, ew, mycudaStream, (/ 1, nvec /), 1 )
      !$acc end host_data
      !
