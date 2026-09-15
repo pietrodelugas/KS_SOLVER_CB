@@ -12,7 +12,7 @@ program cb_davidson_main
    use omp_lib,               only: omp_get_thread_num, omp_set_lock, omp_unset_lock, omp_init_lock
 #if defined(__CUDA)
    use openacc,               only: acc_get_cuda_stream
-   use laxlib_cusolver_handles, ONLY : initialize_cusolver_handles, initialize_laxlib_cuda_stream, initialize_cublas_handles, finalize_cublas_handles
+   use laxlib_cusolver_handles, ONLY : cublas_handle,initialize_cusolver_handles, initialize_laxlib_cuda_stream, initialize_cublas_handles, finalize_cublas_handles
    !!M.Iovine - initialize_cublas_handle added for cublas initialization
 #endif
    !!use nvpl_lapack,         only: nvpl_lapack_set_num_threads
@@ -89,7 +89,6 @@ program cb_davidson_main
 #endif
    !$omp end parallel
 
-
  
 
    allocate(npw_batched(nk_batches)) 
@@ -141,7 +140,7 @@ program cb_davidson_main
        call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), & 
-                      nhpsi_batched(i_batch), i_batch, nk_batches, hc_c, sc_c, vc_c, ew_c, nbase_c, nbase_max ) !!M.Iovine - added n_k as argument 
+                      nhpsi_batched(i_batch), i_batch, nk_batches, hc_c, sc_c, vc_c, ew_c, nbase_c, nbase_max ) !!M.Iovine -                                                                                                                                         !!added n_k as argument 
                                                                                                                 !!of the subroutine and added 3d 
                                                                                                                 !!arrays for batched kernel calls.
        !$acc end host_data  
