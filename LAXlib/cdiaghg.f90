@@ -216,6 +216,7 @@ SUBROUTINE laxlib_cdiaghg_gpu( n, m, h_d, s_d, ldh, e_d, v_d, me_bgrp, root_bgrp
   !!
   !! GPU VERSION.
   !
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY : ERROR_UNIT !! debug printout goes to stderr, not stdout
 #if defined(_OPENMP)
   USE omp_lib
 #endif
@@ -224,8 +225,8 @@ SUBROUTINE laxlib_cdiaghg_gpu( n, m, h_d, s_d, ldh, e_d, v_d, me_bgrp, root_bgrp
   USE cudafor
   !
   USE cusolverdn
-  USE laxlib_cusolver_handles, ONLY : cusolver_handle, cusolver_initialized, laxlib_cuda_stream, & 
-                                      cusolver_thread 
+  USE laxlib_cusolver_handles, ONLY : cusolver_handle, cusolver_initialized, laxlib_cuda_stream, &
+                                      cusolver_thread
 #endif
   !
   USE laxlib_parallel_include
@@ -428,9 +429,9 @@ SUBROUTINE laxlib_cdiaghg_gpu( n, m, h_d, s_d, ldh, e_d, v_d, me_bgrp, root_bgrp
   !!M.IOvine - debug line:
   IF (.NOT. ALLOCATED(e_orig_check)) ALLOCATE(e_orig_check(n))
    e_orig_check = e_d(1:n)    
-  print *, 'ORIGINAL cdiaghg_gpu e_d =', e_orig_check(1:5)
+  WRITE(ERROR_UNIT,*) 'ORIGINAL cdiaghg_gpu e_d =', e_orig_check(1:5)
   !
-  print *, 'CUSOLVER THREAD: ', cusolver_thread
+  WRITE(ERROR_UNIT,*) 'CUSOLVER THREAD: ', cusolver_thread
   CALL stop_clock_gpu( 'cdiaghg' )
   !
   RETURN
@@ -449,6 +450,7 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   !!
   !! GPU VERSION.
   !
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY : ERROR_UNIT !! debug printout goes to stderr, not stdout
 #if defined(_OPENMP)
   USE omp_lib
 #endif
@@ -460,7 +462,7 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   !
   USE openacc, only: c_devptr !! M.Iovine - we include c_devptr
   USE cusolverdn
-  USE laxlib_cusolver_handles, ONLY : cusolver_handle, cusolver_initialized, laxlib_cuda_stream, & 
+  USE laxlib_cusolver_handles, ONLY : cusolver_handle, cusolver_initialized, laxlib_cuda_stream, &
                                       cusolver_thread, cublas_handle, cublas_initialized !!M.Iovine - added subroutines for cublas
 #endif
   !
@@ -602,7 +604,7 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   ! ... only the first processor diagonalizes the matrix
   !
   IF ( me_bgrp == root_bgrp ) THEN
-      print *, 'DEBUG: n =', n, ' m =', m, ' ldh =', ldh, ' n_k =', n_k
+      WRITE(ERROR_UNIT,*) 'DEBUG: n =', n, ' m =', m, ' ldh =', ldh, ' n_k =', n_k
       !
       ! Keeping compatibility for both CUSolver and CustomEigensolver, CUSolver below
       !
@@ -652,7 +654,7 @@ inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
 inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
 has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
 has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+WRITE(ERROR_UNIT,*) '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
@@ -697,15 +699,15 @@ print *, '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
     !!M.Iovine - added debugging lines:
     IF (.NOT. ALLOCATED(s_orig_check)) ALLOCATE(s_orig_check(ldh, n))
     s_orig_check = s_d(:,:,2)
-    print *, 'FIRST 2 elements of the diagonal of kth S : ', s_orig_check(1,1), s_orig_check(2,2)
-    print *, 'FIRST ROW OF kth S MATRIX : ', s_orig_check(1,:) 
+    WRITE(ERROR_UNIT,*) 'FIRST 2 elements of the diagonal of kth S : ', s_orig_check(1,1), s_orig_check(2,2)
+    WRITE(ERROR_UNIT,*) 'FIRST ROW OF kth S MATRIX : ', s_orig_check(1,:) 
     !!! 
 
     
     !!!DEBUGG :
     istat_cublas = cudaGetLastError()
 IF (istat_cublas /= 0) THEN
-   print *, 'STICKY CUDA ERROR before ZpotrfBatched: ', &
+   WRITE(ERROR_UNIT,*) 'STICKY CUDA ERROR before ZpotrfBatched: ', &
              cudaGetErrorString(istat_cublas)
 END IF
     !!!!
@@ -732,7 +734,7 @@ END IF
     
     IF (.NOT. ALLOCATED(dinfo_host)) ALLOCATE(dinfo_host(n_k))
     dinfo_host = d_info(1:n_k)
-    print *, '[CHOLESKY d_info] per-batch status =', dinfo_host
+    WRITE(ERROR_UNIT,*) '[CHOLESKY d_info] per-batch status =', dinfo_host
     !!!!!
     
 
@@ -747,7 +749,7 @@ inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
 inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
 has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
 has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+WRITE(ERROR_UNIT,*) '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
@@ -780,7 +782,7 @@ inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
 inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
 has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
 has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+WRITE(ERROR_UNIT,*) '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
@@ -804,7 +806,7 @@ inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
 inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
 has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
 has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+WRITE(ERROR_UNIT,*) '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 
@@ -844,7 +846,7 @@ print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
                 max_asym = MAX(max_asym, ABS(h_sym_chk(ii_sym,jj_sym) - CONJG(h_sym_chk(jj_sym,ii_sym))))
           END DO
         END DO
-        print *, '[SYM CHECK] max Hermitian asymmetry in h_d before eigensolver =', max_asym
+        WRITE(ERROR_UNIT,*) '[SYM CHECK] max Hermitian asymmetry in h_d before eigensolver =', max_asym
 
 
       !!!! M.Iovine - We change the routine from the single kernel call to the batched routine of NVIDIA Cusolver:
@@ -855,7 +857,7 @@ print *, '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
      info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after batched diag.', ABS(info))
     dinfo_host = d_info(1:n_k)
-    print *, '[DIAG CUSOLVER CHECK NEW d_info] per-batch status =', dinfo_host
+    WRITE(ERROR_UNIT,*) '[DIAG CUSOLVER CHECK NEW d_info] per-batch status =', dinfo_host
 
      !!! DEBUGGING LINES: 
 IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
@@ -867,7 +869,7 @@ inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
 inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
 has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
 has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+WRITE(ERROR_UNIT,*) '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 
@@ -903,7 +905,7 @@ inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
 inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
 has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
 has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[6] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+WRITE(ERROR_UNIT,*) '[6] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 IF (.NOT. ALLOCATED(nan_echk)) ALLOCATE(nan_echk(n), nan_emask(n))
@@ -912,7 +914,7 @@ IF (info /= 0) CALL lax_error__('cdiaghg_gpu', &
                                  'sync before reading e_d', ABS(info))
 nan_echk = e_d(1:n,1)
 nan_emask = ieee_is_nan(nan_echk)
-print *, '[E] e_d has_nan =', ANY(nan_emask), ' first vals =', nan_echk(1:5)
+WRITE(ERROR_UNIT,*) '[E] e_d has_nan =', ANY(nan_emask), ' first vals =', nan_echk(1:5)
 
     !!!! M.Iovine - We need to order in acending way the eigenvalues
     !!!! and the corresponding eigenvectors:
@@ -996,7 +998,7 @@ inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
 inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
 has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
 has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-print *, '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+WRITE(ERROR_UNIT,*) '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
          ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
       
       
@@ -1086,7 +1088,7 @@ info = cudaDeviceSynchronize()
   IF (.NOT. ALLOCATED(nan_echk)) ALLOCATE(nan_echk(n), nan_emask(n))
 nan_echk = e_d(1:n,1)
 nan_emask = ieee_is_nan(nan_echk)
-print *, '[E2] e_d has_nan =', ANY(nan_emask), ' first vals =', nan_echk(1:5)
+WRITE(ERROR_UNIT,*) '[E2] e_d has_nan =', ANY(nan_emask), ' first vals =', nan_echk(1:5)
 
 !!!! DEBUGGING LINES:  
 #if defined(__CUDA)
