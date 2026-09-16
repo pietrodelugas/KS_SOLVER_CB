@@ -20,7 +20,7 @@
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
-                    n_k, hc_comp, sc_comp, vc_comp, ew_comp )
+                    n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -99,6 +99,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! threads solving the other k-points of the current batch
   REAL(DP), INTENT(INOUT) :: ew_comp(nvec,n_k)
     ! shared, batch-wide reduced eigenvalues, one column per k-point
+  LOGICAL, INTENT(INOUT) :: done_comp(n_k) ! Added standard array for checking convergence for every thread
   !
   ! ... LOCAL variables
   !
@@ -140,6 +141,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   ! GPU stream management
   INTEGER :: async_id
   INTEGER(kind=cuda_stream_kind) :: mycudaStream, prova
+  LOGICAL :: my_done !Added variable for control in iterative part
 #if defined(__CUDA)
   type(cublasHandle) :: myblasHandle(20) 
   INTEGER :: istat_cublas
@@ -387,8 +389,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   !
   ! ... iterate
   !
+  my_done = .FALSE. !We set my_done to false to initialize it
+  done_comp(i_batch) = .FALSE. !We set the current thread element of the done_comp shared array to FALSE
   iterate: DO kter = 1, maxter
      !
+     IF ( .NOT. my_done ) THEN
      dav_iter = kter ; !write(*,*) kter, notcnv, conv
      !
      CALL start_clock( 'cegterg:update' )
@@ -624,6 +629,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !
      ! ... diagonalize the reduced hamiltonian
      !
+
      call omp_set_lock(cegterg_locker) 
      !$acc host_data use_device(hc, sc, vc, ew)
      CALL start_clock( 'cegterg:diag' )
@@ -638,6 +644,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      ENDIF
      CALL stop_clock( 'cegterg:diag' )
      !$acc end host_data
+     !
+     END IF !! Added if over my_done variable
      !
      ! ... test for convergence
      !
@@ -684,19 +692,28 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
            !
            CALL stop_clock( 'cegterg:last' )
            !
-           EXIT iterate
+           !EXIT iterate !Commented and added the next line
+           my_done = .TRUE. ! Added my_done variable update
            !
-        ELSE IF ( dav_iter == maxter ) THEN
+        !ELSE IF ( dav_iter == maxter ) THEN
            !
            ! ... last iteration, some roots not converged: return
            !
            !!!WRITE( stdout, '(5X,"WARNING: ",I5, &
            !!!     &   " eigenvalues not converged")' ) notcnv
            !
+           !CALL stop_clock( 'cegterg:last' )
+           !
+           !EXIT iterate
+           !
+        END IF
+        !
+        ! Added update of done_vomp shared array among threads and barrier and if statement:
+        done_comp(i_batch) = my_done
+        !$omp barrier 
+        IF( ALL(done_comp(1:n_k)) .OR. dav_iter == maxiter) THEN
            CALL stop_clock( 'cegterg:last' )
-           !
            EXIT iterate
-           !
         END IF
         !
         ! ... refresh psi, H*psi and S*psi

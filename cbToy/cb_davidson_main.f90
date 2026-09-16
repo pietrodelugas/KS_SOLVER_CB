@@ -37,6 +37,7 @@ program cb_davidson_main
    ! batched cuSOLVER call
    COMPLEX(DP), ALLOCATABLE :: hc_c(:,:,:), sc_c(:,:,:), vc_c(:,:,:)
    REAL(DP), ALLOCATABLE :: ew_c(:,:)
+   LOGICAL, ALLOCATABLE :: done_comp(n_k) 
 #if defined(__MPI)
 ! local paralelization variables
    integer :: ndiag     ! input value of processors in the diagonalization group
@@ -105,6 +106,7 @@ program cb_davidson_main
    ! matrix size for this call
    allocate( hc_c(nbnd, nbnd, nk_batches), sc_c(nbnd, nbnd, nk_batches), vc_c(nbnd, nbnd, nk_batches) )
    allocate( ew_c(nbnd, nk_batches) )
+   allocate( done_comp(nk_batches) )
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
 
@@ -115,6 +117,7 @@ program cb_davidson_main
      ! inside cegterg needs every thread of the team to be an active
      ! participant in its "!$omp barrier"/"!$omp single" synchronization
      n_k = min(nk_batches, nks - ik +1)
+     !done_comp = .FALSE. !done_comp reset to false
      call start_clock('davidson')
      !$omp parallel num_threads(n_k) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
      !$omp do
@@ -141,7 +144,7 @@ program cb_davidson_main
        call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
-                      nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c )
+                      nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -179,6 +182,7 @@ program cb_davidson_main
    deallocate( fft_array_batched, aux_batched )
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
    deallocate( hc_c, sc_c, vc_c, ew_c )
+   deallocate( done_comp )
 
    call finalize_cublas_handles()
 
