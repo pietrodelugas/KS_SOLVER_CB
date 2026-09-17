@@ -420,7 +420,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !$omp barrier ! barrier added to guarantee that all the threads updated the shared array nbase_comp
      IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
         nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
-     ENDIF
+     END IF
      !
      IF ( .NOT. done_comp(i_batch) ) THEN
         my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
@@ -686,7 +686,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !$acc wait(async_id)
      ! Padding logic END
 
-     !$acc host_data use_device(hc, sc, vc, ew)
      CALL start_clock( 'cegterg:diag' )
      IF( my_bgrp_id == root_bgrp_id ) THEN
         !$omp single
