@@ -20,7 +20,8 @@
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
-                    n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp )
+                    n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, &
+                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, nbase_max)
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -99,7 +100,14 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! threads solving the other k-points of the current batch
   REAL(DP), INTENT(INOUT) :: ew_comp(nvec,n_k)
     ! shared, batch-wide reduced eigenvalues, one column per k-point
+  COMPLEX(DP), INTENT(INOUT) :: hc_comp_itr(nvecx,nvecx,n_k), sc_comp_itr(nvecx,nvecx,n_k), vc_comp_itr(nvecx,nvecx,n_k)
+    ! shared, batch-wide reduced Hamiltonian/overlap/eigenvector work arrays for iterative part
+    ! slice (:,:,i_batch) belongs to this thread, the rest to the other
+    ! threads solving the other k-points of the current batch
+  REAL(DP), INTENT(INOUT) :: ew_comp_itr(nvecx,n_k) !shared reduced eigenvalues for the iterative part
   LOGICAL, INTENT(INOUT) :: done_comp(n_k) ! Added standard array for checking convergence for every thread
+  INTEGER, INTENT(INOUT) :: nbase_comp(:) ! Added shared array for nbase related to each thread
+  INTEGER, INTENT(INOUT) :: nbase_max ! Added nbase_max
   !
   ! ... LOCAL variables
   !
@@ -134,6 +142,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! threshold for empty bands
   INTEGER, ALLOCATABLE :: recv_counts(:), displs(:)
     ! receive counts and memory offsets
+  INTEGER :: my_slot ! Added variable for the currency of the threads among the threads not converged!!
+  INTEGER :: n_active ! Added for estimate the threads not converged yet
   INTEGER, PARAMETER :: blocksize = 256
   INTEGER :: numblock
     ! chunking parameters
@@ -393,8 +403,28 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   done_comp(i_batch) = .FALSE. !We set the current thread element of the done_comp shared array to FALSE
   iterate: DO kter = 1, maxter
      !
+     ! The if checks if for the current thread the convergence has been reached
+     ! 
      IF ( .NOT. my_done ) THEN
      dav_iter = kter ; !write(*,*) kter, notcnv, conv
+     !
+     ! The if checks if for the current thread the convergence has been reached
+     ! The current nbase is stored only if the convergence has not been reached
+     IF ( .NOT. done_comp(i_batch) ) THEN 
+        nbase_comp(i_batch) = nbase 
+     END IF
+     !
+     !Each thread compute the active threads (not converged yet):
+     n_active = COUNT(.NOT. done_comp(1:n_k))
+
+     !$omp barrier ! barrier added to guarantee that all the threads updated the shared array nbase_comp
+     IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
+        nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
+     ENDIF
+     !
+     IF ( .NOT. done_comp(i_batch) ) THEN
+        my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
+     END IF
      !
      CALL start_clock( 'cegterg:update' )
      !
@@ -629,21 +659,57 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !
      ! ... diagonalize the reduced hamiltonian
      !
+     ! For each thread hc_comp_itr and sc_comp_itr are assigned based on sc and hc up to the nbase-th element :
+     !$acc kernels async(async_id)
+     hc_comp_itr(:,:,i_batch) = hc(1:nbase,1:nbase)
+     sc_comp_itr(:,:,i_batch) = sc(1:nbase,1:nbase)
+     !$acc end kernels
+     !$acc wait(async_id)
+     
+     ! Padding logic START :
+     DO i = nbase+1 , nvecx
+        !$acc kernels async(async_id)
+        hc_comp_itr(:,i,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+        hc_comp_itr(i,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+        sc_comp_itr(:,i,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+        sc_comp_itr(i,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+        !$acc end kernels
+     END DO
+     !$acc wait(async_id)
+     
+     DO i = nbase+1 , nvecx
+        !$acc kernels async(async_id)
+        sc_comp_itr(i,i,i_batch) = CMPLX(1.D0,0.D0,kind=DP)
+        hc_comp_itr(i,i,i_batch) = CMPLX(i*1e3,0.D0,kind=DP)
+        !$acc end kernels
+     END DO
+     !$acc wait(async_id)
+     ! Padding logic END
 
-     call omp_set_lock(cegterg_locker) 
      !$acc host_data use_device(hc, sc, vc, ew)
      CALL start_clock( 'cegterg:diag' )
      IF( my_bgrp_id == root_bgrp_id ) THEN
-        CALL diaghg( nbase, nvec, hc, sc, nvecx, ew, vc, me_bgrp, root_bgrp, intra_bgrp_comm )
+        !$omp single
+        !$acc host_data use_device(hc_comp_itr, sc_comp_itr, ew_comp_itr, vc_comp_itr)
+        CALL diaghg( nvecx, nvec, hc_comp_itr, sc_comp_itr, nvecx, ew_comp_itr, vc_comp_itr, n_active, me_bgrp, root_bgrp, intra_bgrp_comm )
+        !$acc end host_data
+        !$omp end single
+!       CALL diaghg( nbase, nvec, hc, sc, nvecx, ew, vc, me_bgrp, root_bgrp, intra_bgrp_comm )
      END IF
+     
+     ! We retrieve data:
+     !$acc kernels async(async_id)
+     vc(1:nvecx,1:nvecx) = vc_comp(:,:,my_slot)
+     ew(1:nvecx)        = ew_comp(:,my_slot)
+     !$acc end kernels
      !$acc wait(async_id)
-     call omp_unset_lock(cegterg_locker) 
+
+     !$omp barrier !We add a barrier for synchronization between threads
      IF( nbgrp > 1 ) THEN
         CALL mp_bcast( vc, root_bgrp_id, inter_bgrp_comm )
         CALL mp_bcast( ew, root_bgrp_id, inter_bgrp_comm )
      ENDIF
      CALL stop_clock( 'cegterg:diag' )
-     !$acc end host_data
      !
      END IF !! Added if over my_done variable
      !
@@ -711,7 +777,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
         ! Added update of done_vomp shared array among threads and barrier and if statement:
         done_comp(i_batch) = my_done
         !$omp barrier 
-        IF( ALL(done_comp(1:n_k)) .OR. dav_iter == maxiter) THEN
+        IF( ALL(done_comp(1:n_k)) .OR. dav_iter == maxter) THEN
            CALL stop_clock( 'cegterg:last' )
            EXIT iterate
         END IF
