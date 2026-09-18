@@ -144,7 +144,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! receive counts and memory offsets
   INTEGER :: my_slot ! Added variable for the currency of the threads among the threads not converged!!
   INTEGER :: n_active ! Added for estimate the threads not converged yet
-  INTEGER :: nbase_max !!!DEBUGG!
+  INTEGER :: nbase_max ! Declared nbase_max as private for each thread
   INTEGER, PARAMETER :: blocksize = 256
   INTEGER :: numblock
     ! chunking parameters
@@ -699,8 +699,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      
      ! We retrieve data:
      !$acc kernels async(async_id)
-     vc(1:nvecx,1:nvecx) = vc_comp(:,:,my_slot)
-     ew(1:nvecx)        = ew_comp(:,my_slot)
+     vc(1:nvecx,1:nvecx) = vc_comp_itr(:,:,i_batch)
+     ew(1:nvecx)        = ew_comp_itr(:,i_batch)
      !$acc end kernels
      !$acc wait(async_id)
 
