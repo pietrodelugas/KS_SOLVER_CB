@@ -37,7 +37,10 @@ program cb_davidson_main
    ! batched cuSOLVER call
    COMPLEX(DP), ALLOCATABLE :: hc_c(:,:,:), sc_c(:,:,:), vc_c(:,:,:)
    REAL(DP), ALLOCATABLE :: ew_c(:,:)
-   LOGICAL, ALLOCATABLE :: done_comp(n_k) 
+   LOGICAL, ALLOCATABLE :: done_comp(:) 
+   COMPLEX(DP), ALLOCATABLE :: hc_comp_itr(:,:,:), sc_comp_itr(:,:,:), vc_comp_itr(:,:,:)
+   REAL(DP), ALLOCATABLE :: ew_comp_itr(:,:)
+   INTEGER, ALLOCATABLE :: nbase_comp(:)
 #if defined(__MPI)
 ! local paralelization variables
    integer :: ndiag     ! input value of processors in the diagonalization group
@@ -107,8 +110,12 @@ program cb_davidson_main
    allocate( hc_c(nbnd, nbnd, nk_batches), sc_c(nbnd, nbnd, nk_batches), vc_c(nbnd, nbnd, nk_batches) )
    allocate( ew_c(nbnd, nk_batches) )
    allocate( done_comp(nk_batches) )
+   allocate( hc_comp_itr(nbndx, nbndx, nk_batches), sc_comp_itr(nbndx, nbndx, nk_batches), vc_comp_itr(nbndx, nbndx, nk_batches) )
+   allocate( ew_comp_itr(nbndx, nk_batches) )
+   allocate( nbase_comp(nk_batches) )
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
+   !$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp)
 
    do ik =1,nks, nk_batches
      ! actual number of k-points in this batch: may be less than nk_batches
@@ -144,7 +151,8 @@ program cb_davidson_main
        call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
-                      nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp )
+                      nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, &
+                      hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -175,6 +183,7 @@ program cb_davidson_main
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
    !$acc exit data delete(hc_c, sc_c, vc_c, ew_c)
+   !$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
    deallocate( eig )
    deallocate( evc )
@@ -183,6 +192,8 @@ program cb_davidson_main
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
    deallocate( hc_c, sc_c, vc_c, ew_c )
    deallocate( done_comp )
+   deallocate( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
+   deallocate( nbase_comp )
 
    call finalize_cublas_handles()
 

@@ -21,7 +21,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, &
-                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, nbase_max)
+                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp)
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -106,8 +106,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! threads solving the other k-points of the current batch
   REAL(DP), INTENT(INOUT) :: ew_comp_itr(nvecx,n_k) !shared reduced eigenvalues for the iterative part
   LOGICAL, INTENT(INOUT) :: done_comp(n_k) ! Added standard array for checking convergence for every thread
-  INTEGER, INTENT(INOUT) :: nbase_comp(:) ! Added shared array for nbase related to each thread
-  INTEGER, INTENT(INOUT) :: nbase_max ! Added nbase_max
+  INTEGER, INTENT(INOUT) :: nbase_comp(n_k) ! Added shared array for nbase related to each thread
+  !INTEGER, INTENT(INOUT) :: nbase_max ! Added nbase_max
   !
   ! ... LOCAL variables
   !
@@ -144,6 +144,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! receive counts and memory offsets
   INTEGER :: my_slot ! Added variable for the currency of the threads among the threads not converged!!
   INTEGER :: n_active ! Added for estimate the threads not converged yet
+  INTEGER :: nbase_max !!!DEBUGG!
   INTEGER, PARAMETER :: blocksize = 256
   INTEGER :: numblock
     ! chunking parameters
