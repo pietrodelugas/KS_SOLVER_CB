@@ -409,24 +409,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      IF ( .NOT. my_done ) THEN
      dav_iter = kter ; !write(*,*) kter, notcnv, conv
      !
-     ! The if checks if for the current thread the convergence has been reached
-     ! The current nbase is stored only if the convergence has not been reached
-     IF ( .NOT. done_comp(i_batch) ) THEN 
-        nbase_comp(i_batch) = nbase 
-     END IF
-     !
-     !Each thread compute the active threads (not converged yet):
-     n_active = COUNT(.NOT. done_comp(1:n_k))
-
-     !$omp barrier ! barrier added to guarantee that all the threads updated the shared array nbase_comp
-     IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
-        nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
-     END IF
-     !
-     IF ( .NOT. done_comp(i_batch) ) THEN
-        my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
-     END IF
-     !
      CALL start_clock( 'cegterg:update' )
      !
      np = 0
@@ -660,28 +642,47 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      !
      ! ... diagonalize the reduced hamiltonian
      !
+     ! The if checks if for the current thread the convergence has been reached
+     ! The current nbase is stored only if the convergence has not been reached
+     IF ( .NOT. done_comp(i_batch) ) THEN
+        nbase_comp(i_batch) = nbase
+     END IF
+     !
+     !Each thread compute the active threads (not converged yet):
+     n_active = COUNT(.NOT. done_comp(1:n_k))
+ 
+     !$omp barrier ! barrier added to guarantee that all the threads updated the shared array nbase_comp
+     IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
+        nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
+     END IF
+     !
+     IF ( .NOT. done_comp(i_batch) ) THEN
+        my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
+     END IF
+
+
      ! For each thread hc_comp_itr and sc_comp_itr are assigned based on sc and hc up to the nbase-th element :
      !$acc kernels async(async_id)
-     hc_comp_itr(:,:,i_batch) = hc(1:nbase,1:nbase)
-     sc_comp_itr(:,:,i_batch) = sc(1:nbase,1:nbase)
+     hc_comp_itr(:,:,my_slot) = hc(1:nbase,1:nbase)
+     sc_comp_itr(:,:,my_slot) = sc(1:nbase,1:nbase)
      !$acc end kernels
      !$acc wait(async_id)
      
      ! Padding logic START :
      DO i = nbase+1 , nvecx
         !$acc kernels async(async_id)
-        hc_comp_itr(:,i,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-        hc_comp_itr(i,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-        sc_comp_itr(:,i,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
-        sc_comp_itr(i,:,i_batch) = CMPLX(0.D0,0.D0,kind=DP)
+        hc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
+        hc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
+        sc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
+        sc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
         !$acc end kernels
      END DO
      !$acc wait(async_id)
      
      DO i = nbase+1 , nvecx
         !$acc kernels async(async_id)
-        sc_comp_itr(i,i,i_batch) = CMPLX(1.D0,0.D0,kind=DP)
-        hc_comp_itr(i,i,i_batch) = CMPLX(i*1e3,0.D0,kind=DP)
+        sc_comp_itr(i,i,my_slot) = CMPLX(1.D0,0.D0,kind=DP)
+        hc_comp_itr(i,i,my_slot) = CMPLX(i*1e3,0.D0,kind=DP)
         !$acc end kernels
      END DO
      !$acc wait(async_id)
@@ -699,8 +700,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      
      ! We retrieve data:
      !$acc kernels async(async_id)
-     vc(1:nvecx,1:nvecx) = vc_comp_itr(:,:,i_batch)
-     ew(1:nvecx)        = ew_comp_itr(:,i_batch)
+     vc(1:nvecx,1:nvecx) = vc_comp_itr(:,:,my_slot)
+     ew(1:nvecx)        = ew_comp_itr(:,my_slot)
      !$acc end kernels
      !$acc wait(async_id)
 
