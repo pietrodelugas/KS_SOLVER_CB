@@ -16,12 +16,17 @@
 #define ZERO ( 0.D0, 0.D0 )
 #define ONE  ( 1.D0, 0.D0 )
 !
+
+MODULE cegterg_mod
+  IMPLICIT NONE
+  
+  CONTAINS
 !----------------------------------------------------------------------------
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, &
-                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp)
+                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -100,11 +105,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! threads solving the other k-points of the current batch
   REAL(DP), INTENT(INOUT) :: ew_comp(nvec,n_k)
     ! shared, batch-wide reduced eigenvalues, one column per k-point
-  COMPLEX(DP), INTENT(INOUT) :: hc_comp_itr(nvecx,nvecx,n_k), sc_comp_itr(nvecx,nvecx,n_k), vc_comp_itr(nvecx,nvecx,n_k)
+  COMPLEX(DP), INTENT(INOUT), ALLOCATABLE :: hc_comp_itr(:,:,:), sc_comp_itr(:,:,:), vc_comp_itr(:,:,:)
     ! shared, batch-wide reduced Hamiltonian/overlap/eigenvector work arrays for iterative part
     ! slice (:,:,i_batch) belongs to this thread, the rest to the other
     ! threads solving the other k-points of the current batch
-  REAL(DP), INTENT(INOUT) :: ew_comp_itr(nvecx,n_k) !shared reduced eigenvalues for the iterative part
+  REAL(DP), INTENT(INOUT), ALLOCATABLE :: ew_comp_itr(:,:) !shared reduced eigenvalues for the iterative part
   LOGICAL, INTENT(INOUT) :: done_comp(n_k) ! Added standard array for checking convergence for every thread
   INTEGER, INTENT(INOUT) :: nbase_comp(n_k) ! Added shared array for nbase related to each thread
   !INTEGER, INTENT(INOUT) :: nbase_max ! Added nbase_max
@@ -150,6 +155,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   INTEGER :: my_slot ! Added variable for the currency of the threads among the threads not converged!!
   INTEGER :: n_active ! Added for estimate the threads not converged yet
   INTEGER :: nbase_max ! Declared nbase_max as private for each thread
+  INTEGER :: prev_nbase_max
+  INTEGER :: prev_n_active
   INTEGER, PARAMETER :: blocksize = 256
   INTEGER :: numblock
     ! chunking parameters
@@ -405,8 +412,15 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   !
   ! ... iterate
   !
+  
+  !$acc wait
+  !$omp barrier
+
   my_done = .FALSE. !We set my_done to false to initialize it
   done_comp(i_batch) = .FALSE. !We set the current thread element of the done_comp shared array to FALSE
+  nbase_comp(i_batch) = nvec  
+  !$omp barrier
+
   iterate: DO kter = 1, maxter
      !
      ! The if checks if for the current thread the convergence has been reached
@@ -653,127 +667,111 @@ IF ( .NOT. my_done ) THEN
         nbase_comp(i_batch) = nbase
      END IF
      !
+     !n_active = COUNT(.NOT. done_comp(1:n_k))
+
 END IF
      
-     !Each thread compute the active threads (not converged yet):
-!     n_active = 0
- !    DO k = 1, n_k
-  !      IF ( .NOT. done_comp(k) ) THEN
-   !        n_active = n_active + 1
-    !       active_map(n_active) = k
-     !   END IF
-    ! END DO
+     !$acc wait(async_id)
+     !$omp barrier
 
+     n_active = COUNT(.NOT. done_comp(1:n_k))
+
+     !$acc wait(async_id)
      !$omp barrier ! barrier added to guarantee that all the threads updated the shared array nbase_comp
-     
-     !IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
-      !  nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
-     !END IF
-     !
-!     IF ( .NOT. done_comp(i_batch) ) THEN
- !       my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
-  !   END IF
 
+!IF ( .NOT. my_done ) THEN
+     IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
+          nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
+     END IF
+!END IF
+     
+     !$acc wait(async_id)
+     !$omp barrier
+     !$omp single
+ !        IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
+  !          nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
+   !      END IF
+ 
+         !$acc wait
+         IF( .NOT. ALLOCATED(hc_comp_itr) ) THEN
+             ALLOCATE( hc_comp_itr(nbase_max,nbase_max,n_active), sc_comp_itr(nbase_max,nbase_max,n_active), &
+                       vc_comp_itr(nbase_max,nbase_max,n_active), ew_comp_itr(nbase_max,n_active) )
+             !$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+             prev_nbase_max = nbase_max
+             prev_n_active  = n_active
+         ELSE
+             IF ( (prev_nbase_max .ne. nbase_max) .OR. (prev_n_active .ne. n_active) ) THEN
+                !$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+                DEALLOCATE( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
+                ALLOCATE( hc_comp_itr(nbase_max,nbase_max,n_active), sc_comp_itr(nbase_max,nbase_max,n_active), &
+                          vc_comp_itr(nbase_max,nbase_max,n_active), ew_comp_itr(nbase_max,n_active) )
+               !$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+               prev_nbase_max = nbase_max
+               prev_n_active  = n_active
+             END IF
+         END IF
+ 
+      !$omp end single
+      !$acc wait
+      !$omp barrier
 
 IF ( .NOT. my_done ) THEN
-      
       IF ( .NOT. done_comp(i_batch) ) THEN
-        my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
+          my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
+       
+          ! For each thread hc_comp_itr and sc_comp_itr are assigned based on sc and hc up to the nbase-th element :
+          !$acc kernels async(async_id)
+          hc_comp_itr(1:nbase,1:nbase,my_slot) = hc(1:nbase,1:nbase)
+          sc_comp_itr(1:nbase,1:nbase,my_slot) = sc(1:nbase,1:nbase)
+          !$acc end kernels
+          !$acc wait(async_id)
+     
+          ! Padding logic START :
+          IF (nbase < nbase_max) THEN
+             DO i = nbase+1 , nbase_max
+                !$acc kernels async(async_id)
+                hc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
+                hc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
+                sc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
+                sc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
+                !$acc end kernels
+             END DO
+             !$acc wait(async_id)
+     
+             DO i = nbase+1 , nbase_max
+                !$acc kernels async(async_id)
+                sc_comp_itr(i,i,my_slot) = CMPLX(1.D0,0.D0,kind=DP)
+                hc_comp_itr(i,i,my_slot) = CMPLX(i*1e3,0.D0,kind=DP)
+                !$acc end kernels
+             END DO
+             !$acc wait(async_id)
+          END IF   
+          ! Padding logic END
       END IF
 
-     ! For each thread hc_comp_itr and sc_comp_itr are assigned based on sc and hc up to the nbase-th element :
-     !$acc kernels async(async_id)
-     hc_comp_itr(1:nbase,1:nbase,my_slot) = hc(1:nbase,1:nbase)
-     sc_comp_itr(1:nbase,1:nbase,my_slot) = sc(1:nbase,1:nbase)
-     !$acc end kernels
-     !$acc wait(async_id)
-     
-     ! Padding logic START :
-     DO i = nbase+1 , nvecx
-        !$acc kernels async(async_id)
-        hc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-        hc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-        sc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-        sc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-        !$acc end kernels
-     END DO
-     !$acc wait(async_id)
-     
-     DO i = nbase+1 , nvecx
-        !$acc kernels async(async_id)
-        sc_comp_itr(i,i,my_slot) = CMPLX(1.D0,0.D0,kind=DP)
-        hc_comp_itr(i,i,my_slot) = CMPLX(i*1e3,0.D0,kind=DP)
-        !$acc end kernels
-     END DO
-     !$acc wait(async_id)
-     ! Padding logic END
-
 END IF
-
+     
+     !$acc wait
+     !$omp barrier
 
      CALL start_clock( 'cegterg:diag' )
      IF( my_bgrp_id == root_bgrp_id ) THEN
         !$omp single
-        
-        n_active = 0
-        DO k = 1, n_k
-           IF ( .NOT. done_comp(k) ) THEN
-              n_active = n_active + 1
-              active_map(n_active) = k
-           END IF
-        END DO
-
-        IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
-           nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
-        END IF
-
-
-        !$acc wait
-        IF( .NOT. ALLOCATED(hc_comp_itr_loc) ) THEN
-            ALLOCATE( hc_comp_itr_loc(nbase_max,nbase_max,n_active), sc_comp_itr_loc(nbase_max,nbase_max,n_active), &
-                      vc_comp_itr_loc(nbase_max,nbase_max,n_active), ew_comp_itr_loc(nbase_max,n_active) )
-            !$acc enter data create(hc_comp_itr_loc, sc_comp_itr_loc, vc_comp_itr_loc, ew_comp_itr_loc)
-        ELSE
-            IF ( (SIZE(hc_comp_itr_loc,1) .lt. nbase_max) .OR. (SIZE(hc_comp_itr_loc,3) .ne. n_active) ) THEN
-               !$acc exit data delete(hc_comp_itr_loc, sc_comp_itr_loc, vc_comp_itr_loc, ew_comp_itr_loc)
-               DEALLOCATE( hc_comp_itr_loc, sc_comp_itr_loc, vc_comp_itr_loc, ew_comp_itr_loc )
-               ALLOCATE( hc_comp_itr_loc(nbase_max,nbase_max,n_active), sc_comp_itr_loc(nbase_max,nbase_max,n_active), &
-                         vc_comp_itr_loc(nbase_max,nbase_max,n_active), ew_comp_itr_loc(nbase_max,n_active) )
-               !$acc enter data create(hc_comp_itr_loc, sc_comp_itr_loc, vc_comp_itr_loc, ew_comp_itr_loc)
-            END IF
-        END IF
- 
-        DO k = 1, n_active
-            !$acc kernels async(async_id)
-            hc_comp_itr_loc(1:nbase_max,1:nbase_max,k) = hc_comp_itr(1:nbase_max,1:nbase_max, active_map(k))
-            sc_comp_itr_loc(1:nbase_max,1:nbase_max,k) = sc_comp_itr(1:nbase_max,1:nbase_max, active_map(k))
-            !$acc end kernels
-        END DO
-        !$acc wait(async_id)
- 
-
-        !$acc host_data use_device(hc_comp_itr_loc, sc_comp_itr_loc, ew_comp_itr_loc, vc_comp_itr_loc)
-        CALL diaghg( nbase_max, nvec, hc_comp_itr_loc, sc_comp_itr_loc, nbase_max, ew_comp_itr_loc, vc_comp_itr_loc, &
+        IF(n_active .GT. 0) THEN
+        !$acc host_data use_device(hc_comp_itr, sc_comp_itr, ew_comp_itr, vc_comp_itr)
+        CALL diaghg( nbase_max, nvec, hc_comp_itr, sc_comp_itr, nbase_max, ew_comp_itr, vc_comp_itr, &
                      n_active, me_bgrp, root_bgrp, intra_bgrp_comm )
         !$acc end host_data
-        
-        DO k = 1, n_active
-            !$acc kernels async(async_id)
-            vc_comp_itr(1:nbase_max,1:nbase_max, active_map(k)) = vc_comp_itr_loc(1:nbase_max,1:nbase_max, k)
-            ew_comp_itr(1:nbase_max, active_map(k))        = ew_comp_itr_loc(1:nbase_max, k)
-            !$acc end kernels
-        END DO
-        !$acc wait(async_id)
-
-
+        !$acc wait
+        END IF
         !$omp end single
      END IF
 
 IF ( .NOT. my_done ) THEN
      ! We retrieve data:
      !$acc kernels async(async_id)
-     vc(1:nvecx,1:nvecx) = vc_comp_itr(:,:,my_slot)
-     ew(1:nvecx)        = ew_comp_itr(:,my_slot)
+     vc(1:nbase_max,1:nbase_max) = vc_comp_itr(1:nbase_max,1:nbase_max,my_slot)
+     ew(1:nbase_max)        = ew_comp_itr(1:nbase_max,my_slot)
      !$acc end kernels
      !$acc wait(async_id)
 END IF
@@ -914,6 +912,12 @@ END IF
   END DO iterate
   !
   !$acc exit data delete(ew) async(async_id) 
+  
+  !IF ( ALLOCATED(hc_comp_itr) ) THEN
+  !!$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+  !DEALLOCATE( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
+  !END IF
+
   DEALLOCATE( recv_counts )
   DEALLOCATE( displs )
   DEALLOCATE( conv )
@@ -921,6 +925,7 @@ END IF
   DEALLOCATE( vc )
   DEALLOCATE( hc )
   DEALLOCATE( sc )
+  
   !
   IF ( uspp ) THEN
      !$acc exit data async(async_id) delete(spsi)
@@ -1958,3 +1963,5 @@ CONTAINS
   END SUBROUTINE set_h_from_e
   !
 END SUBROUTINE pcegterg
+
+END MODULE cegterg_mod

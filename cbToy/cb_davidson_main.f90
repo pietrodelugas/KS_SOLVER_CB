@@ -2,6 +2,7 @@ program cb_davidson_main
 
 ! global variables
    USE cb_module
+   use cegterg_mod
 #if defined(__MPI)
    use mp_global,            ONLY : mp_startup, mp_global_end
    use mp_world,             ONLY : world_comm
@@ -41,6 +42,7 @@ program cb_davidson_main
    COMPLEX(DP), ALLOCATABLE :: hc_comp_itr(:,:,:), sc_comp_itr(:,:,:), vc_comp_itr(:,:,:)
    REAL(DP), ALLOCATABLE :: ew_comp_itr(:,:)
    INTEGER, ALLOCATABLE :: nbase_comp(:)
+   INTEGER :: nbase_max
 #if defined(__MPI)
 ! local paralelization variables
    integer :: ndiag     ! input value of processors in the diagonalization group
@@ -110,12 +112,12 @@ program cb_davidson_main
    allocate( hc_c(nbnd, nbnd, nk_batches), sc_c(nbnd, nbnd, nk_batches), vc_c(nbnd, nbnd, nk_batches) )
    allocate( ew_c(nbnd, nk_batches) )
    allocate( done_comp(nk_batches) )
-   allocate( hc_comp_itr(nbndx, nbndx, nk_batches), sc_comp_itr(nbndx, nbndx, nk_batches), vc_comp_itr(nbndx, nbndx, nk_batches) )
-   allocate( ew_comp_itr(nbndx, nk_batches) )
+   !allocate( hc_comp_itr(nbndx, nbndx, nk_batches), sc_comp_itr(nbndx, nbndx, nk_batches), vc_comp_itr(nbndx, nbndx, nk_batches) )
+   !allocate( ew_comp_itr(nbndx, nk_batches) )
    allocate( nbase_comp(nk_batches) )
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
-   !$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp)
+   !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
 
    do ik =1,nks, nk_batches
      ! actual number of k-points in this batch: may be less than nk_batches
@@ -125,6 +127,12 @@ program cb_davidson_main
      ! participant in its "!$omp barrier"/"!$omp single" synchronization
      n_k = min(nk_batches, nks - ik +1)
      !done_comp = .FALSE. !done_comp reset to false
+     
+     !!allocate( hc_comp_itr(nbnd, nbnd, nk_batches), sc_comp_itr(nbnd, nbnd, nk_batches), vc_comp_itr(nbnd, nbnd, nk_batches) )
+     !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+     
+     done_comp = .FALSE.
+
      call start_clock('davidson')
      !$omp parallel num_threads(n_k) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
      !$omp do
@@ -163,6 +171,10 @@ program cb_davidson_main
      ! !$omp barrier   !Remove
      !$acc wait  
      !$acc update self(eig_batched) 
+     
+     !!$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) 
+     !deallocate(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+
      ! Second loop: Process batches sequentially
      do i_batch =1, min(nk_batches, nks - ik +1 )  
         print '("Second loop, batch ",I5)', i_batch 
@@ -183,7 +195,7 @@ program cb_davidson_main
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
    !$acc exit data delete(hc_c, sc_c, vc_c, ew_c)
-   !$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp)
+   !!$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
    deallocate( eig )
    deallocate( evc )
@@ -192,7 +204,7 @@ program cb_davidson_main
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
    deallocate( hc_c, sc_c, vc_c, ew_c )
    deallocate( done_comp )
-   deallocate( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
+   !deallocate( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
    deallocate( nbase_comp )
 
    call finalize_cublas_handles()
