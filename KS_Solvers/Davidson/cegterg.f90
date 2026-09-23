@@ -833,7 +833,8 @@ END IF
            !
            ! ... all roots converged: return
            !
-           CALL stop_clock( 'cegterg:last' )
+           ! We comment the call stop_clock because the condition for terminatig the iterative process is related to done_comp and dav_iter
+           !CALL stop_clock( 'cegterg:last' )
            !
            !EXIT iterate !Commented and added the next line
            my_done = .TRUE. ! Added my_done variable update
