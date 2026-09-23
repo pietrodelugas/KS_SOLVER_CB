@@ -155,8 +155,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   INTEGER :: my_slot ! Added variable for the currency of the threads among the threads not converged!!
   INTEGER :: n_active ! Added for estimate the threads not converged yet
   INTEGER :: nbase_max ! Declared nbase_max as private for each thread
-  INTEGER :: prev_nbase_max
-  INTEGER :: prev_n_active
+  INTEGER, SAVE :: prev_nbase_max = -1
+  INTEGER, SAVE :: prev_n_active = -1
   INTEGER, PARAMETER :: blocksize = 256
   INTEGER :: numblock
     ! chunking parameters
@@ -673,26 +673,27 @@ END IF
      
      !$acc wait(async_id)
      !$omp barrier
+     
+     write(*,*) 'CHECK1 i_batch=', i_batch, ' kter=', kter, ' done_comp=', done_comp(1:n_k), &
+           ' nbase_comp=', nbase_comp(1:n_k), ' n_active=', n_active, ' nbase_max=', nbase_max
 
      n_active = COUNT(.NOT. done_comp(1:n_k))
 
      !$acc wait(async_id)
      !$omp barrier ! barrier added to guarantee that all the threads updated the shared array nbase_comp
 
-!IF ( .NOT. my_done ) THEN
      IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
           nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
      END IF
-!END IF
      
      !$acc wait(async_id)
      !$omp barrier
      !$omp single
- !        IF ( n_active .gt. 0.D0 ) THEN  ! We assign a value to nbase_max only if there are still threads not converged!
-  !          nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
-   !      END IF
- 
-         !$acc wait
+          write(*,*) 'SINGLE i_batch=', i_batch, ' nbase_max=', nbase_max, ' n_active=', n_active, &
+           ' prev_nbase_max=', prev_nbase_max, ' prev_n_active=', prev_n_active, &
+           ' ALLOCATED=', ALLOCATED(hc_comp_itr)
+
+         !!$acc wait
          IF( .NOT. ALLOCATED(hc_comp_itr) ) THEN
              ALLOCATE( hc_comp_itr(nbase_max,nbase_max,n_active), sc_comp_itr(nbase_max,nbase_max,n_active), &
                        vc_comp_itr(nbase_max,nbase_max,n_active), ew_comp_itr(nbase_max,n_active) )
@@ -715,6 +716,7 @@ END IF
       !$acc wait
       !$omp barrier
 
+      !!PADDING LOGICS :
 IF ( .NOT. my_done ) THEN
       IF ( .NOT. done_comp(i_batch) ) THEN
           my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
@@ -724,7 +726,7 @@ IF ( .NOT. my_done ) THEN
           hc_comp_itr(1:nbase,1:nbase,my_slot) = hc(1:nbase,1:nbase)
           sc_comp_itr(1:nbase,1:nbase,my_slot) = sc(1:nbase,1:nbase)
           !$acc end kernels
-          !$acc wait(async_id)
+          !!$acc wait(async_id) !!!!!!!!!!!!!!!!!!!!!!ATTENTION!!!!!!!!!!!!!!
      
           ! Padding logic START :
           IF (nbase < nbase_max) THEN
@@ -748,15 +750,18 @@ IF ( .NOT. my_done ) THEN
           END IF   
           ! Padding logic END
       END IF
-
+      !$omp barrier !! It is needed to add a barrier inside the IF because a barrier only after the IF statement branching doesn't prevent
+                    !! the OMP threads to go further in the code instructions during the execution
+      write(*,*) 'PADDING DONE i_batch=', i_batch
 END IF
+     !! END PADDING LOGICS !
      
-     !$acc wait
      !$omp barrier
 
      CALL start_clock( 'cegterg:diag' )
      IF( my_bgrp_id == root_bgrp_id ) THEN
         !$omp single
+        write(*,*) 'ENTERING SINGLE, all threads must have passed prior barrier'
         IF(n_active .GT. 0) THEN
         !$acc host_data use_device(hc_comp_itr, sc_comp_itr, ew_comp_itr, vc_comp_itr)
         CALL diaghg( nbase_max, nvec, hc_comp_itr, sc_comp_itr, nbase_max, ew_comp_itr, vc_comp_itr, &

@@ -2,7 +2,8 @@ program cb_davidson_main
 
 ! global variables
    USE cb_module
-   use cegterg_mod
+   use cegterg_mod ! We introduced the cegterg subroutines in the module cegterg_mod -> this is necessary to set the arrays for the batched 
+                   ! kernel calls as allocatable inside the subroutines in order to manage their allocation/deallocation
 #if defined(__MPI)
    use mp_global,            ONLY : mp_startup, mp_global_end
    use mp_world,             ONLY : world_comm
@@ -117,7 +118,8 @@ program cb_davidson_main
    allocate( nbase_comp(nk_batches) )
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
-   !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+   !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) !! We commented the line because we manage the 
+                                                                                !! allocation/deallocation inside the cegterg subroutine!
 
    do ik =1,nks, nk_batches
      ! actual number of k-points in this batch: may be less than nk_batches
@@ -126,10 +128,6 @@ program cb_davidson_main
      ! inside cegterg needs every thread of the team to be an active
      ! participant in its "!$omp barrier"/"!$omp single" synchronization
      n_k = min(nk_batches, nks - ik +1)
-     !done_comp = .FALSE. !done_comp reset to false
-     
-     !!allocate( hc_comp_itr(nbnd, nbnd, nk_batches), sc_comp_itr(nbnd, nbnd, nk_batches), vc_comp_itr(nbnd, nbnd, nk_batches) )
-     !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
      
      done_comp = .FALSE.
 
@@ -172,8 +170,8 @@ program cb_davidson_main
      !$acc wait  
      !$acc update self(eig_batched) 
      
-     !!$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) 
-     !deallocate(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+     !$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) 
+     deallocate(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
 
      ! Second loop: Process batches sequentially
      do i_batch =1, min(nk_batches, nks - ik +1 )  
@@ -204,7 +202,6 @@ program cb_davidson_main
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
    deallocate( hc_c, sc_c, vc_c, ew_c )
    deallocate( done_comp )
-   !deallocate( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
    deallocate( nbase_comp )
 
    call finalize_cublas_handles()
