@@ -696,13 +696,6 @@ WRITE(ERROR_UNIT,*) '[1] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_in
     !!! M.Iovine - we copy the c_devptr in the host array arr_of_ptr_s to the device array arr_of_ptr_s_d
     arr_of_ptr_s_d = arr_of_ptr_s
     
-    !!M.Iovine - added debugging lines:
-    IF (.NOT. ALLOCATED(s_orig_check)) ALLOCATE(s_orig_check(ldh, n))
-    s_orig_check = s_d(:,:,2)
-    WRITE(ERROR_UNIT,*) 'FIRST 2 elements of the diagonal of kth S : ', s_orig_check(1,1), s_orig_check(2,2)
-    WRITE(ERROR_UNIT,*) 'FIRST ROW OF kth S MATRIX : ', s_orig_check(1,:) 
-    !!! 
-
     
     !!!DEBUGG :
     istat_cublas = cudaGetLastError()
