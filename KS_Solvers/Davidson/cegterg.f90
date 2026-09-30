@@ -26,14 +26,15 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, &
-                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp )
+                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
+                    psi_comp, hpsi_comp, spsi_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
   !
   ! ... ( H - e S ) * evc = 0
   !
-  ! ... where H is an hermitean operator, e is a real scalar,
+  ! ... where H is an hermitean operator, e is a real scalarBatched ZGemm calls before the iterative part!!,
   ! ... S is an overlap matrix, evc is a complex vector
   !
 #if defined(__CUDA)
@@ -105,6 +106,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! threads solving the other k-points of the current batch
   REAL(DP), INTENT(INOUT) :: ew_comp(nvec,n_k)
     ! shared, batch-wide reduced eigenvalues, one column per k-point
+  COMPLEX(DP), INTENT(INOUT) :: psi_comp(npwx*npol,nvecx,n_k), spsi_comp(npwx*npol,nvecx,n_k), hpsi_comp(npwx*npol,nvecx,n_k)
   COMPLEX(DP), INTENT(INOUT), ALLOCATABLE :: hc_comp_itr(:,:,:), sc_comp_itr(:,:,:), vc_comp_itr(:,:,:)
     ! shared, batch-wide reduced Hamiltonian/overlap/eigenvector work arrays for iterative part
     ! slice (:,:,i_batch) belongs to this thread, the rest to the other
@@ -124,7 +126,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
     ! dimension of the reduced basis
     ! counter on the reduced basis vectors
     ! adapted npw and npwx
-    ! do-loop counters
   INTEGER :: n_start, n_end, my_n
   INTEGER :: column_section_type
     ! defines a column section for communication
@@ -155,8 +156,9 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   INTEGER :: my_slot ! Added variable for the currency of the threads among the threads not converged!!
   INTEGER :: n_active ! Added for estimate the threads not converged yet
   INTEGER :: nbase_max ! Declared nbase_max as private for each thread
-  INTEGER, SAVE :: prev_nbase_max = -1
-  INTEGER, SAVE :: prev_n_active = -1
+  INTEGER, SAVE :: prev_nbase_max = -1 !Variable declared to check variations of nbase_max within the iterative part
+  INTEGER, SAVE :: prev_n_active = -1 !Variable declared to check variations of n_active within the iterative part
+  INTEGER :: info
   INTEGER, PARAMETER :: blocksize = 256
   INTEGER :: numblock
     ! chunking parameters
@@ -198,6 +200,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
 #endif
   !$acc data deviceptr(e) async(async_id) 
   !
+  
+  write(6,*) 'ALLOC POINT cegterg POINT 1'
+  flush(6)
+
+
   IF ( nvec > nvecx / 2 ) CALL errore( 'cegterg', 'nvecx is too small', 1 )
   !
   ! ... threshold for empty bands
@@ -221,6 +228,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   numblock  = (npw+blocksize-1)/blocksize
 #endif
   !
+  
+  write(6,*) 'ALLOC POINT cegterg POINT 2'
+  flush(6)
+
+
   ALLOCATE(  psi( npwx*npol, nvecx ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate psi ', ABS(ierr) )
@@ -229,6 +241,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      CALL errore( ' cegterg ',' cannot allocate hpsi ', ABS(ierr) )
   !$acc enter data async(async_id) create(psi, hpsi)
   !
+
+  write(6,*) 'ALLOC POINT cegterg POINT 3'
+  flush(6)
+
+
   IF ( uspp ) THEN
      ALLOCATE( spsi( npwx*npol, nvecx ), STAT=ierr )
      IF( ierr /= 0 ) &
@@ -245,7 +262,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   ALLOCATE( vc( nvecx, nvecx ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate vc ', ABS(ierr) )
-  ALLOCATE( ew( nvecx ), STAT=ierr )
   !$acc enter data create(ew) async(async_id) 
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate ew ', ABS(ierr) )
@@ -254,6 +270,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
      CALL errore( ' cegterg ',' cannot allocate conv ', ABS(ierr) )
   ALLOCATE( recv_counts(mp_size(inter_bgrp_comm)), displs(mp_size(inter_bgrp_comm)) )
   !
+
+  write(6,*) 'ALLOC POINT cegterg POINT 4'
+  flush(6)
+
+
   notcnv = nvec
   nbase  = nvec
   conv   = .FALSE.
@@ -269,6 +290,10 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   !
   ! ... spsi contains s times the basis vectors
   !
+  
+  write(6,*) 'BEFORE s_psi_ptr: shape(spsi)=', shape(spsi)
+  flush(6)
+  
   IF ( uspp ) CALL s_psi_ptr( npwx, npw, nvec, psi, spsi, i_batch )
   !
   ! ... hc contains the projection of the hamiltonian onto the reduced 
@@ -276,13 +301,66 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   !
   CALL start_clock( 'cegterg:init' )
   !
+
+  write(6,*) 'ALLOC POINT cegterg POINT 5'
+  flush(6)
+
+
   !$acc host_data use_device(evc, psi, hpsi, spsi, hc, sc)
   CALL divide_all(inter_bgrp_comm,nbase,n_start,n_end,recv_counts,displs)
   CALL mp_type_create_column_section(sc(1,1), 0, nbase, nvecx, column_section_type)
   my_n = n_end - n_start + 1; !write (*,*) nbase,n_start,n_end
   !
-  if (n_start .le. n_end) &
-  CALL ZGEMM( 'C','N', nbase, my_n, kdim, ONE, psi, kdmx, hpsi(1,n_start), kdmx, ZERO, hc(1,n_start), nvecx )
+
+  write(6,*) 'ALLOC POINT cegterg POINT 6'
+  flush(6)
+
+
+  !!!!!! We proceed with the copy of hpsi, psi, hc into the 3d array required for the batched Cublas GEMM kernel call
+  !$acc kernels !async(async_id)
+  hpsi_comp(:,:,i_batch) = hpsi(:,:)
+  !$acc end kernels
+
+  write(6,*) 'ALLOC POINT cegterg POINT 6.1'
+  flush(6)
+  
+  !$acc kernels
+  psi_comp(:,:,i_batch) = psi(1:(npwx*npol),1:nvecx)
+  !$acc end kernels
+
+  write(6,*) 'ALLOC POINT cegterg POINT 6.2'
+  flush(6)
+  
+  !$acc kernels async(async_id)
+  hc_comp(:,:,i_batch) = hc(1:nvecx,1:nvecx)
+  !$acc end kernels
+  
+  !$acc wait(async_id)
+  !$omp barrier
+
+  write(6,*) 'ALLOC POINT cegterg POINT 7'
+  flush(6)
+
+
+  if (n_start .le. n_end) THEN
+  !CALL ZGEMM( 'C','N', nbase, my_n, kdim, ONE, psi, kdmx, hpsi(1,n_start), kdmx, ZERO, hc(1,n_start), nvecx )
+  !$omp single
+  !
+  !$acc host_data use_device(psi_comp,hpsi_comp,hc_comp)
+  info = cublasZgemmStridedBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim, ONE, psi_comp(:,:,1), &
+                                   kdmx, INT(npwx*npol*nvecx,8), hpsi_comp(1,n_start,1), kdmx, INT(npwx*npol*nvecx,8), ZERO, hc_comp(1,n_start,1), &
+                                   nvecx, INT(npwx*npol*nvecx,8), n_k)
+  !$acc end host_data
+  !$omp end single
+  !$acc wait(async_id)
+  END IF
+
+  write(6,*) 'ALLOC POINT cegterg POINT 8'
+  flush(6)
+
+!
+  ! We reset hc_comp that is needed for the Batched kernel call to diaghg before the iterative part:
+  hc_comp(:,:,i_batch) = CMPLX(0.D0,0.D0)
   !
   if (n_start .le. n_end) & 
 #if defined(__CUDA)
@@ -292,20 +370,86 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
 #endif
   CALL mp_gather( hc, column_section_type, recv_counts, displs, root_bgrp_id, inter_bgrp_comm )
   !
+
+  write(6,*) 'ALLOC POINT cegterg POINT 9'
+  flush(6)
+  
+  write(6,*) 'shapes: spsi=', shape(spsi), ' spsi_comp dims=', size(spsi_comp,1), size(spsi_comp,2), size(spsi_comp,3), ' i_batch=', i_batch
+  flush(6)
+
+  !!!!!! We proceed with the copy of spsi, psi, sc into the 3d array required for the batched Cublas GEMM kernel call
+  IF ( uspp ) THEN
+     !$acc kernels !async(async_id)
+     spsi_comp(:,:,i_batch) = spsi(:,:)
+     !$acc end kernels
+  END IF
+
+  !$acc kernels async(async_id)
+  sc_comp(:,:,i_batch) = sc(1:nvecx,1:nvecx)
+  !$acc end kernels
+  
+  !$acc wait(async_id)
+  
+  !$omp barrier ! We add a barrier to be sure the OpenMP threads are synchronized
+
+  write(6,*) 'ALLOC POINT cegterg POINT 10'
+  flush(6)
+
   IF ( uspp ) THEN
      !
-     if (n_start .le. n_end) &
-     CALL ZGEMM( 'C','N', nbase, my_n, kdim, ONE, psi, kdmx, spsi(1,n_start), kdmx, &
-                 ZERO, sc(1,n_start), nvecx )
-     !
+     if (n_start .le. n_end) THEN
+     !$omp single
+     !CALL ZGEMM( 'C','N', nbase, my_n, kdim, ONE, psi, kdmx, spsi(1,n_start), kdmx, &
+                 !ZERO, sc(1,n_start), nvecx )
+     !$acc host_data use_device(psi_comp,spsi_comp,sc_comp)
+     info = cublasZgemmStridedBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim, ONE, psi_comp(:,:,1), &
+                                      kdmx, INT(npwx*npol*nvecx,8), spsi_comp(1,n_start,1), kdmx, INT(npwx*npol*nvecx,8), &
+                                      ZERO, sc_comp(1,n_start,1), nvecx, INT(npwx*npol*nvecx,8), n_k)
+     !$acc end host_data
+     !$omp end single 
+     !$acc wait(async_id)
+     
+     write(6,*) 'ALLOC POINT cegterg POINT 11'
+     flush(6)
+
+
+     END IF
   ELSE
      !
-     if (n_start .le. n_end) &
-     CALL ZGEMM( 'C','N', nbase, my_n, kdim, ONE, psi, kdmx, psi(1,n_start), kdmx, &
-                 ZERO, sc(1,n_start), nvecx )
-     !
+     if (n_start .le. n_end) THEN
+     !$omp single
+     !CALL ZGEMM( 'C','N', nbase, my_n, kdim, ONE, psi, kdmx, psi(1,n_start), kdmx, &
+                 !ZERO, sc(1,n_start), nvecx )
+     !$acc host_data use_device(psi_comp,spsi_comp,sc_comp)
+     info = cublasZgemmStridedBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, nbase, my_n, kdim, ONE, psi_comp(:,:,1), &
+                                      kdmx, INT(npwx*npol*nvecx,8), spsi_comp(1,n_start,1), kdmx, INT(npwx*npol*nvecx,8), ZERO, & 
+                                      sc_comp(1,n_start,1), nvecx, INT(npwx*npol*nvecx,8), n_k)
+     !$acc end host_data
+     !$omp end single
+     !$acc wait(async_id)
+     END IF
+     
+     write(6,*) 'ALLOC POINT cegterg POINT 12'
+     flush(6)
+
   END IF
   !
+  !$acc kernels async(async_id)
+  spsi(:,:) = spsi_comp(1:(npwx*npol),1:nvecx,i_batch)
+  psi(:,:) = psi_comp(1:(npwx*npol),1:nvecx,i_batch)
+  sc(:,:) = sc_comp(1:(npwx*npol),1:nvecx,i_batch)
+  !$acc end kernels
+  !$acc wait(async_id)
+  !
+  ! We reset sc_comp that is needed for the Batched kernel call to diaghg before the iterative part:
+  sc_comp(:,:,i_batch) = CMPLX(0.D0,0.D0)
+  !
+  !
+
+  write(6,*) 'ALLOC POINT cegterg POINT 13'
+  flush(6)
+
+
   if (n_start .le. n_end) & 
 #if defined(__CUDA)
          CALL mp_sum( sc, 1, nbase, n_start, n_end , intra_bgrp_comm )

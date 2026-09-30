@@ -44,6 +44,8 @@ program cb_davidson_main
    REAL(DP), ALLOCATABLE :: ew_comp_itr(:,:)
    INTEGER, ALLOCATABLE :: nbase_comp(:)
    INTEGER :: nbase_max
+   COMPLEX(DP), ALLOCATABLE :: psi_comp(:,:,:), hpsi_comp(:,:,:), spsi_comp(:,:,:)
+   INTEGER :: npwx_npol
 #if defined(__MPI)
 ! local paralelization variables
    integer :: ndiag     ! input value of processors in the diagonalization group
@@ -102,6 +104,8 @@ program cb_davidson_main
    call set_cb_potential
    if (use_overlap) write(*,*) '** TEST:  CB hamiltonian modified so as to need an overlap matrix **'
    overlap = use_overlap
+   
+   npwx_npol = npwx*npol
 
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
    allocate( fft_array_batched(dfft%nnr, nk_batches), aux_batched(dfft%nnr, nk_batches) )
@@ -113,11 +117,16 @@ program cb_davidson_main
    allocate( hc_c(nbnd, nbnd, nk_batches), sc_c(nbnd, nbnd, nk_batches), vc_c(nbnd, nbnd, nk_batches) )
    allocate( ew_c(nbnd, nk_batches) )
    allocate( done_comp(nk_batches) )
-   !allocate( hc_comp_itr(nbndx, nbndx, nk_batches), sc_comp_itr(nbndx, nbndx, nk_batches), vc_comp_itr(nbndx, nbndx, nk_batches) )
-   !allocate( ew_comp_itr(nbndx, nk_batches) )
    allocate( nbase_comp(nk_batches) )
+   allocate( psi_comp(npwx_npol,nbndx,nk_batches), hpsi_comp(npwx*npol,nbndx,nk_batches), spsi_comp(npwx_npol,nbndx,nk_batches) ) !We allocate the 3
+                                                                                                                                   !arrays needed 
+                                                                                                                                   !for the Batched 
+                                                                                                                                   !ZGemm calls 
+                                                                                                                                   !before the 
+                                                                                                                                   !iterative part!!
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
+   !$acc enter data create(psi_comp, hpsi_comp, spsi_comp)
    !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) !! We commented the line because we manage the 
                                                                                 !! allocation/deallocation inside the cegterg subroutine!
 
@@ -158,7 +167,8 @@ program cb_davidson_main
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
                       nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, &
-                      hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp )
+                      hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
+                      psi_comp, hpsi_comp, spsi_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -193,7 +203,7 @@ program cb_davidson_main
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
    !$acc exit data delete(hc_c, sc_c, vc_c, ew_c)
-   !!$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+   !$acc exit data delete(psi_comp, hpsi_comp, spsi_comp)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
    deallocate( eig )
    deallocate( evc )
@@ -203,6 +213,7 @@ program cb_davidson_main
    deallocate( hc_c, sc_c, vc_c, ew_c )
    deallocate( done_comp )
    deallocate( nbase_comp )
+   deallocate( psi_comp, hpsi_comp, spsi_comp )
 
    call finalize_cublas_handles()
 
