@@ -44,7 +44,10 @@ program cb_davidson_main
    REAL(DP), ALLOCATABLE :: ew_comp_itr(:,:)
    INTEGER, ALLOCATABLE :: nbase_comp(:)
    INTEGER :: nbase_max
+   !!Declaration of arrays for zgemm batched call:
    COMPLEX(DP), ALLOCATABLE :: psi_comp(:,:,:), hpsi_comp(:,:,:), spsi_comp(:,:,:)
+   COMPLEX(DP), ALLOCATABLE :: hc_c_zgem(:,:,:), sc_c_zgem(:,:,:)
+   INTEGER, ALLOCATABLE :: kdim_comp(:)
    INTEGER :: npwx_npol
 #if defined(__MPI)
 ! local paralelization variables
@@ -124,6 +127,9 @@ program cb_davidson_main
                                                                                                                                    !ZGemm calls 
                                                                                                                                    !before the 
                                                                                                                                    !iterative part!!
+   allocate( kdim_comp(nk_batches) ) !!Allocation of the array needed for the padding before the batched Zgemm kernel call
+   allocate( hc_c_zgem(nbndx, nbndx, nk_batches), sc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
+   !$acc enter data create(hc_c_zgem, sc_c_zgem) 
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
    !$acc enter data create(psi_comp, hpsi_comp, spsi_comp)
@@ -168,7 +174,7 @@ program cb_davidson_main
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
                       nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, &
                       hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
-                      psi_comp, hpsi_comp, spsi_comp )
+                      psi_comp, hpsi_comp, spsi_comp, hc_c_zgem, sc_c_zgem, kdim_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -205,6 +211,7 @@ program cb_davidson_main
    !$acc exit data delete(hc_c, sc_c, vc_c, ew_c)
    !$acc exit data delete(psi_comp, hpsi_comp, spsi_comp)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
+   !$acc exit data delete(hc_c_zgem, sc_c_zgem)
    deallocate( eig )
    deallocate( evc )
    deallocate( evc_batched, eig_batched )
@@ -214,6 +221,8 @@ program cb_davidson_main
    deallocate( done_comp )
    deallocate( nbase_comp )
    deallocate( psi_comp, hpsi_comp, spsi_comp )
+   deallocate( hc_c_zgem, sc_c_zgem ) !We deallocate the arrays shared for the zgemm batched calls
+   deallocate( kdim_comp )
 
    call finalize_cublas_handles()
 
