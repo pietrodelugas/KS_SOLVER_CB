@@ -347,7 +347,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   flush(6)
 
   IF (kdim .LT. kdim_max) THEN
-     DO i = kdim_comp(i_batch) + 1, npwx*npol
+     DO i = kdim_comp(i_batch) + 1, nbase_max
         !$acc kernels async(async_id)
         psi_comp(i, :, i_batch)  = (0.0_DP, 0.0_DP)
         hpsi_comp(i, :, i_batch) = (0.0_DP, 0.0_DP)
