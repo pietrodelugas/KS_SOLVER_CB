@@ -13,7 +13,7 @@ program cb_davidson_main
                                    fftw_locker, cegterg_locker            
    use omp_lib,               only: omp_get_thread_num, omp_set_lock, omp_unset_lock, omp_init_lock
 #if defined(__CUDA)
-   use openacc,               only: acc_get_cuda_stream
+   use openacc,               only: acc_get_cuda_stream, c_devptr
    use laxlib_cusolver_handles, ONLY : initialize_cusolver_handles, initialize_laxlib_cuda_stream, &
                                        initialize_cublas_handles, finalize_cublas_handles
 #endif
@@ -46,9 +46,13 @@ program cb_davidson_main
    INTEGER :: nbase_max
    !!Declaration of arrays for zgemm batched call:
    COMPLEX(DP), ALLOCATABLE :: psi_comp(:,:,:), hpsi_comp(:,:,:), spsi_comp(:,:,:)
-   COMPLEX(DP), ALLOCATABLE :: hc_c_zgem(:,:,:), sc_c_zgem(:,:,:)
+   COMPLEX(DP), ALLOCATABLE :: hc_c_zgem(:,:,:), sc_c_zgem(:,:,:), vc_c_zgem(:,:,:)
    INTEGER, ALLOCATABLE :: kdim_comp(:)
+   INTEGER, ALLOCATABLE :: notcnv_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
+   INTEGER, ALLOCATABLE :: my_n_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
    INTEGER :: npwx_npol
+   TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:)
+
 #if defined(__MPI)
 ! local paralelization variables
    integer :: ndiag     ! input value of processors in the diagonalization group
@@ -121,6 +125,7 @@ program cb_davidson_main
    allocate( ew_c(nbnd, nk_batches) )
    allocate( done_comp(nk_batches) )
    allocate( nbase_comp(nk_batches) )
+   allocate( my_n_comp(nk_batches) )
    allocate( psi_comp(npwx_npol,nbndx,nk_batches), hpsi_comp(npwx*npol,nbndx,nk_batches), spsi_comp(npwx_npol,nbndx,nk_batches) ) !We allocate the 3
                                                                                                                                    !arrays needed 
                                                                                                                                    !for the Batched 
@@ -128,8 +133,13 @@ program cb_davidson_main
                                                                                                                                    !before the 
                                                                                                                                    !iterative part!!
    allocate( kdim_comp(nk_batches) ) !!Allocation of the array needed for the padding before the batched Zgemm kernel call
+   allocate( notcnv_comp(nk_batches) ) !!Allocation of array needed for batched Zgemm call
    allocate( hc_c_zgem(nbndx, nbndx, nk_batches), sc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
-   !$acc enter data create(hc_c_zgem, sc_c_zgem) 
+   allocate( vc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
+   allocate( ptr_hc(nk_batches), ptr_vc(nk_batches), ptr_sc(nk_batches), ptr_psi(nk_batches) ) !We allocate the arrays shared for the zgemm batched 
+   allocate( ptr_hpsi(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
+   !!$acc enter data create(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result)
+   !$acc enter data create(hc_c_zgem, sc_c_zgem, vc_c_zgem) 
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
    !$acc enter data create(psi_comp, hpsi_comp, spsi_comp)
@@ -174,7 +184,8 @@ program cb_davidson_main
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
                       nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, &
                       hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
-                      psi_comp, hpsi_comp, spsi_comp, hc_c_zgem, sc_c_zgem, kdim_comp )
+                      psi_comp, hpsi_comp, spsi_comp, hc_c_zgem, sc_c_zgem, vc_c_zgem, kdim_comp, notcnv_comp, &
+                      ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result, my_n_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -205,13 +216,19 @@ program cb_davidson_main
         write (stdout,*) 'batch', i_batch, 'dav_iter, nhpsi, notcnv, ethr ', &
                          dav_iter_batched(i_batch), nhpsi_batched(i_batch), notcnv_batched(i_batch), ethr !Fixed
      end do 
+     
+     ! We comment the following lines and do the deallocation after the do loop to prevent the code from deallocating a not allocated
+     ! array and to prevent deallocation errors blocking the execution of the next batches:
+     !!$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result)
+     !deallocate(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result)
    end do
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
    !$acc exit data delete(hc_c, sc_c, vc_c, ew_c)
    !$acc exit data delete(psi_comp, hpsi_comp, spsi_comp)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
-   !$acc exit data delete(hc_c_zgem, sc_c_zgem)
+   !$acc exit data delete(hc_c_zgem, sc_c_zgem, vc_c_zgem)
+   !$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result)
    deallocate( eig )
    deallocate( evc )
    deallocate( evc_batched, eig_batched )
@@ -221,9 +238,11 @@ program cb_davidson_main
    deallocate( done_comp )
    deallocate( nbase_comp )
    deallocate( psi_comp, hpsi_comp, spsi_comp )
-   deallocate( hc_c_zgem, sc_c_zgem ) !We deallocate the arrays shared for the zgemm batched calls
+   deallocate( hc_c_zgem, sc_c_zgem, vc_c_zgem ) !We deallocate the arrays shared for the zgemm batched calls
    deallocate( kdim_comp )
-
+   deallocate( notcnv_comp )
+   deallocate( my_n_comp )
+   deallocate( ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result )
    call finalize_cublas_handles()
 
    call print_clock('davidson')
