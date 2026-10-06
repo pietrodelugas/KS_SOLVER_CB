@@ -51,7 +51,8 @@ program cb_davidson_main
    INTEGER, ALLOCATABLE :: notcnv_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
    INTEGER, ALLOCATABLE :: my_n_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
    INTEGER :: npwx_npol
-   TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:)
+   TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
+                                  ptr_hpsi_nb1(:)
 
 #if defined(__MPI)
 ! local paralelization variables
@@ -137,7 +138,7 @@ program cb_davidson_main
    allocate( hc_c_zgem(nbndx, nbndx, nk_batches), sc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    allocate( vc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    allocate( ptr_hc(nk_batches), ptr_vc(nk_batches), ptr_sc(nk_batches), ptr_psi(nk_batches) ) !We allocate the arrays shared for the zgemm batched 
-   allocate( ptr_hpsi(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
+   allocate( ptr_hpsi(nk_batches), ptr_hpsi_nb1(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    !!$acc enter data create(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result)
    !$acc enter data create(hc_c_zgem, sc_c_zgem, vc_c_zgem) 
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
@@ -185,7 +186,7 @@ program cb_davidson_main
                       nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, &
                       hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
                       psi_comp, hpsi_comp, spsi_comp, hc_c_zgem, sc_c_zgem, vc_c_zgem, kdim_comp, notcnv_comp, &
-                      ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result, my_n_comp )
+                      ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, my_n_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -228,7 +229,7 @@ program cb_davidson_main
    !$acc exit data delete(psi_comp, hpsi_comp, spsi_comp)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
    !$acc exit data delete(hc_c_zgem, sc_c_zgem, vc_c_zgem)
-   !$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result)
+   !$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result)
    deallocate( eig )
    deallocate( evc )
    deallocate( evc_batched, eig_batched )
@@ -242,7 +243,7 @@ program cb_davidson_main
    deallocate( kdim_comp )
    deallocate( notcnv_comp )
    deallocate( my_n_comp )
-   deallocate( ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result )
+   deallocate( ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result )
    call finalize_cublas_handles()
 
    call print_clock('davidson')

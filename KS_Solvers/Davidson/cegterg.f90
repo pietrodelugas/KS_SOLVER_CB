@@ -28,7 +28,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, &
                     hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
                     psi_comp, hpsi_comp, spsi_comp, hc_comp_zgem, sc_comp_zgem, vc_comp_zgem, kdim_comp, notcnv_comp, &
-                    ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result, my_n_comp )
+                    ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, my_n_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -121,7 +121,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   INTEGER, INTENT(INOUT) :: notcnv_comp(n_k) ! Added for the batched Zgemm call inside the iterative part
   INTEGER, INTENT(INOUT) :: my_n_comp(n_k) ! Added for the batched Zgemm call inside the iterative part
   !We declare the following standard arrays of c-pointer(c_devptr) so that they will be array of pointers to matrices for the batched Zgemm:
-  TYPE(c_devptr), INTENT(INOUT), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:)
+  TYPE(c_devptr), INTENT(INOUT), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
+                                                ptr_hpsi_nb1(:)
   !
   !INTEGER, INTENT(INOUT) :: nbase_max ! Added nbase_max
   !
@@ -700,15 +701,17 @@ END IF
 
      !$omp single
      IF(.NOT.(ALLOCATED(ptr_psi))) THEN
-         ALLOCATE(ptr_psi(n_active_zgem), ptr_vc(n_active_zgem), ptr_psi_result(n_active_zgem))
-         !$acc enter data create(ptr_psi, ptr_vc, ptr_psi_result)
+         ALLOCATE(ptr_psi(n_active_zgem), ptr_vc(n_active_zgem), ptr_psi_result(n_active_zgem), &
+         ptr_hpsi(n_active_zgem), ptr_hpsi_nb1(n_active_zgem), ptr_sc(n_active_zgem), ptr_hc(n_active_zgem))
+         !$acc enter data create(ptr_psi, ptr_vc, ptr_psi_result, ptr_hpsi, ptr_hpsi_nb1, ptr_sc, ptr_hc)
          prev_n_active_zgem  = n_active_zgem
      ELSE
          IF(prev_n_active_zgem /= n_active_zgem) THEN
-            !$acc exit data delete(ptr_psi, ptr_vc, ptr_psi_result)
-            DEALLOCATE(ptr_psi, ptr_vc, ptr_psi_result)
-            ALLOCATE(ptr_psi(n_active_zgem), ptr_vc(n_active_zgem), ptr_psi_result(n_active_zgem))
-            !$acc enter data create(ptr_psi, ptr_vc, ptr_psi_result)
+            !$acc exit data delete(ptr_psi, ptr_vc, ptr_psi_result, ptr_hpsi, ptr_hpsi_nb1, ptr_sc, ptr_hc)
+            DEALLOCATE(ptr_psi, ptr_vc, ptr_psi_result, ptr_hpsi, ptr_hpsi_nb1, ptr_sc, ptr_hc)
+            ALLOCATE(ptr_psi(n_active_zgem), ptr_vc(n_active_zgem), ptr_psi_result(n_active_zgem), &
+            ptr_hpsi(n_active_zgem), ptr_hpsi_nb1(n_active_zgem), ptr_sc(n_active_zgem), ptr_hc(n_active_zgem))
+            !$acc enter data create(ptr_psi, ptr_vc, ptr_psi_result, ptr_hpsi, ptr_hpsi_nb1, ptr_sc, ptr_hc)
             prev_n_active_zgem  = n_active_zgem
          END IF
      END IF
@@ -738,7 +741,11 @@ END IF
        IF ( .NOT. done_comp(i_batch) ) THEN
           my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
           ptr_vc(my_slot) = c_devloc(vc(n_start,1)) !In this case we use c_devloc because vc is present only on the device (device resident)
+          ptr_hc(my_slot) = c_devloc(hc(nb1,n_start))
+          ptr_sc(my_slot) = c_devloc(sc(nb1,n_start))
           ptr_psi(my_slot) = acc_deviceptr(psi(1,n_start))
+          ptr_hpsi(my_slot) = acc_deviceptr(hpsi(1,n_start))
+          ptr_hpsi_nb1(my_slot) = acc_deviceptr(hpsi(1,nb1))
           ptr_psi_result(my_slot) = acc_deviceptr(psi(1,nb1))
 
           IF ( uspp ) THEN
@@ -833,22 +840,30 @@ flush(6)
      write(6,*) 'ALLOC POINT cegterg POINT 17'
      flush(6)
 
-     !DEBUGGING PRINT OF my_n and kdim:
-     print *, "my_n value: ", my_n
-     print *, "kdim value: ", kdim
-     print *, "n_start value: ", n_start
-     print *, "nb1: ", nb1
-     print *, "i_batch: ", i_batch
-     print *, "notcnv: ", notcnv
-     !
-     write(6,*) 'ALLOC POINT cegterg POINT 18'
-     flush(6)
+END IF
+     
+     !$acc wait(async_id)
+     !$omp barrier
 
+     !$omp single
+
+     !$acc update device(ptr_hpsi, ptr_psi_result)
+     if (n_start .le. n_end) THEN
+     !CALL ZGEMM( 'N','N', kdim, notcnv, my_n, ONE, hpsi(1,n_start), kdmx, vc(n_start,1), nvecx, &
+     !           ONE, psi(1,nb1), kdmx )
+     !$acc host_data use_device(ptr_hpsi, ptr_vc, ptr_psi_result) 
+     info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
+                                     ptr_hpsi, kdmx, ptr_vc, nvecx, ONE, ptr_psi_result, kdmx, n_active_zgem)
+     !$acc end host_data
+     END IF
+     !$omp end single
+     
+IF ( .NOT. my_done ) THEN
+ 
+     print *, "nb1 After Zgemm call 1 in iterative part", nb1
+     print *, "Ibatch After Zgemm: ", i_batch
 
      !$acc host_data use_device(psi, hpsi, vc, ew)
-     if (n_start .le. n_end) &
-     CALL ZGEMM( 'N','N', kdim, notcnv, my_n, ONE, hpsi(1,n_start), kdmx, vc(n_start,1), nvecx, &
-                 ONE, psi(1,nb1), kdmx )
      CALL mp_sum( psi(:,nb1:nbase+notcnv), inter_bgrp_comm )
      !
      
@@ -940,21 +955,57 @@ flush(6)
      CALL divide_all(inter_bgrp_comm,nbase+notcnv,n_start,n_end,recv_counts,displs)
      CALL mp_type_create_column_section(sc(1,1), nbase, notcnv, nvecx, column_section_type)
      my_n = n_end - n_start + 1; !write (*,*) nbase+notcnv,n_start,n_end
+     !$acc end host_data
      !
-     !DEBUGGING PRINT OF my_n and kdim:
-     print *, "my_n value: ", my_n
-     print *, "kdim value: ", kdim
-     print *, "n_start value: ", n_start
-     print *, "nb1: ", nb1
-     print *, "i_batch: ", i_batch
-     print *, "notcnv: ", notcnv
      !
+END IF
+     
+     ! We need to recompute notcnv_comp and my_n_comp because they were re-compute since the first assignment:
+     notcnv_comp(i_batch) = notcnv
+     my_n_comp(i_batch) = my_n
+     
+     !$omp barrier ! barrier added to guarantee that all the threads updated the shared array nbase_comp
+     
+     notcnv_max = MAXVAL(notcnv_comp(:))! MASK=.NOT. done_comp(1:n_k))
+     my_n_max = MAXVAL(my_n_comp(:))!, MASK=.NOT. done_comp(1:n_k))
+     
+     !! It is necessary to explicitly reassign the pointers to the corresponding matrices because the matrices dimensions
+     !! and probably their memory location have changed, in particular n_start changed in the calls to divide_all and 
+     !! mp_type_create_column_section :
+     IF ( .NOT. my_done ) THEN
+        IF ( .NOT. done_comp(i_batch) ) THEN
+           my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
+           ptr_hc(my_slot) = c_devloc(hc(nb1,n_start))
+           ptr_psi(my_slot) = acc_deviceptr(psi(1,n_start))
+           ptr_hpsi_nb1(my_slot) = acc_deviceptr(hpsi(1,nb1))
+        END IF
+     END IF
+     
+     !$acc wait(async_id)
+     !$omp barrier
+
      write(6,*) 'ALLOC POINT cegterg POINT 22'
      flush(6)
      
-     CALL ZGEMM( 'C','N', notcnv, my_n, kdim, ONE, hpsi(1,nb1), kdmx, psi(1,n_start), kdmx, &
-                 ZERO, hc(nb1,n_start), nvecx )
-     !
+     print *, "nb1 Before Zgemm call 2 in iterative part", nb1
+     print *, "Ibatch Before Zgemm: ", i_batch
+     
+     print *,"notcnv max in 2nd Zgemm call:", notcnv_max
+     print *,"my_n max in 2nd Zgemm call:", my_n_max
+
+     !$omp single
+     !$acc update device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
+     !$acc host_data use_device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
+     info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
+                                    ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx, n_active_zgem)
+     print *, "info zgemm 2nd call: ", info
+     !$acc end host_data
+     !$omp end single
+     !$acc wait(async_id)
+
+IF( .NOT. my_done ) THEN
+
+     !$acc host_data use_device(psi, hpsi, spsi, hc, sc)
      if (n_start .le. n_end) &
 #if defined(__CUDA)
        CALL mp_sum( hc, nb1, nbase+notcnv, n_start, n_end , intra_bgrp_comm )
@@ -965,15 +1016,6 @@ flush(6)
      !
      CALL divide(inter_bgrp_comm,nbase+notcnv,n_start,n_end)
      my_n = n_end - n_start + 1; !write (*,*) nbase+notcnv,n_start,n_end
-     
-     !DEBUGGING PRINT OF my_n and kdim:
-     print *, "my_n value: ", my_n
-     print *, "kdim value: ", kdim
-     print *, "n_start value: ", n_start
-     print *, "nb1: ", nb1
-     print *, "i_batch: ", i_batch
-     print *, "notcnv: ", notcnv
-     !
 
      IF ( uspp ) THEN
         !
