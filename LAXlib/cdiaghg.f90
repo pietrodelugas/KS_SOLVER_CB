@@ -733,17 +733,17 @@ END IF
 
 
 !!! DEBUGGING LINES:
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-WRITE(ERROR_UNIT,*) '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+!                                        inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!WRITE(ERROR_UNIT,*) '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+!         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
     !! We assign to each element of arr_of_ptr the device pointer to each 2D slice in h_d :
@@ -766,17 +766,17 @@ WRITE(ERROR_UNIT,*) '[2] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_in
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang left', ABS(info))
 
 !!! DEBUGGING LINES
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-WRITE(ERROR_UNIT,*) '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+ !                                       inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!WRITE(ERROR_UNIT,*) '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+!         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 !!!!
 
     !! y = w L(conj. transpose) :
@@ -790,17 +790,17 @@ WRITE(ERROR_UNIT,*) '[3] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_in
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang right', ABS(info))
 
 !!! DEBUGGING LINES:
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-WRITE(ERROR_UNIT,*) '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+ !                                       inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!WRITE(ERROR_UNIT,*) '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+!         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 
       !!!! M.Iovine - we define the parameters for the Jacobi algorithm corresponding to the diagonalization done through the batched cuSolver routine:
@@ -853,17 +853,17 @@ WRITE(ERROR_UNIT,*) '[4] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_in
     WRITE(ERROR_UNIT,*) '[DIAG CUSOLVER CHECK NEW d_info] per-batch status =', dinfo_host
 
      !!! DEBUGGING LINES: 
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-WRITE(ERROR_UNIT,*) '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+ !                                       inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!WRITE(ERROR_UNIT,*) '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+!         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
 
       !! M.Iovine - we destroy the SyevjInfo object:
@@ -889,19 +889,19 @@ WRITE(ERROR_UNIT,*) '[5] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_in
     IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang final', ABS(info))
 
    !!! DEBUGGING LINES:   
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = h_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-WRITE(ERROR_UNIT,*) '[6] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+ !                                       inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = h_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!WRITE(ERROR_UNIT,*) '[6] h_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+ !        ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
 
-IF (.NOT. ALLOCATED(nan_echk)) ALLOCATE(nan_echk(n), nan_emask(n))
+!IF (.NOT. ALLOCATED(nan_echk)) ALLOCATE(nan_echk(n), nan_emask(n))
 info = cudaDeviceSynchronize()
 IF (info /= 0) CALL lax_error__('cdiaghg_gpu', &
                                  'sync before reading e_d', ABS(info))
@@ -982,17 +982,17 @@ info = cudaDeviceSynchronize()
       !
 
  !!! DEBUGGING LINES:   
-IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
-                                        inf_mask_r(n,n), inf_mask_i(n,n))
-nan_chk = v_d(1:n,1:n,1)
-nan_mask_r = ieee_is_nan(REAL(nan_chk))
-nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
-inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
-inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
-has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
-has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
-WRITE(ERROR_UNIT,*) '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
-         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
+!IF (.NOT. ALLOCATED(nan_chk)) ALLOCATE(nan_chk(n,n), nan_mask_r(n,n), nan_mask_i(n,n), &
+!                                        inf_mask_r(n,n), inf_mask_i(n,n))
+!nan_chk = v_d(1:n,1:n,1)
+!nan_mask_r = ieee_is_nan(REAL(nan_chk))
+!nan_mask_i = ieee_is_nan(AIMAG(nan_chk))
+!inf_mask_r = (.NOT. ieee_is_finite(REAL(nan_chk))) .AND. (.NOT. nan_mask_r)
+!inf_mask_i = (.NOT. ieee_is_finite(AIMAG(nan_chk))) .AND. (.NOT. nan_mask_i)
+!has_nan_dbg = ANY(nan_mask_r) .OR. ANY(nan_mask_i)
+!has_inf_dbg = ANY(inf_mask_r) .OR. ANY(inf_mask_i)
+!WRITE(ERROR_UNIT,*) '[7] v_d input has_nan =', has_nan_dbg, ' has_inf =', has_inf_dbg, &
+!         ' maxabs =', MAXVAL(ABS(nan_chk), MASK = ieee_is_finite(REAL(nan_chk)) .AND. ieee_is_finite(AIMAG(nan_chk)))
       
       
       
