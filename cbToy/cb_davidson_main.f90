@@ -143,7 +143,7 @@ program cb_davidson_main
    allocate( vc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    allocate( ptr_hc(nk_batches), ptr_vc(nk_batches), ptr_sc(nk_batches), ptr_psi(nk_batches), ptr_evc(nk_batches) ) !We allocate the arrays shared for the zgemm batched 
    allocate( ptr_hpsi(nk_batches), ptr_hpsi_nb1(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
-   !allocate(ptr_psi_final(nk_batches), ptr_hpsi_final(nk_batches), ptr_spsi_final(nk_batches), ptr_vc_final(nk_batches)) !We allocate the arrays shared for the zgemm batched calls in the final part of the cegterg
+   allocate(ptr_psi_final(nk_batches), ptr_hpsi_final(nk_batches), ptr_spsi_final(nk_batches), ptr_vc_final(nk_batches)) !We allocate the arrays shared for the zgemm batched calls in the final part of the cegterg
    !!$acc enter data create(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_spsi, ptr_psi_result)
    !$acc enter data create(hc_c_zgem, sc_c_zgem, vc_c_zgem) 
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
@@ -236,7 +236,7 @@ program cb_davidson_main
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
    !$acc exit data delete(hc_c_zgem, sc_c_zgem, vc_c_zgem)
    !$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc)
-   !!$acc exit data delete(ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, ptr_evc)
+   !$acc exit data delete(ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final)
    deallocate( eig )
    deallocate( evc )
    deallocate( evc_batched, eig_batched )
@@ -251,8 +251,8 @@ program cb_davidson_main
    deallocate( kdim_comp )
    deallocate( notcnv_comp )
    deallocate( my_n_comp )
-   deallocate( ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result )
-   !deallocate( ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, ptr_evc )
+   deallocate( ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc )
+   deallocate( ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final )
    call finalize_cublas_handles()
 
    call print_clock('davidson')

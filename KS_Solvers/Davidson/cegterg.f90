@@ -701,7 +701,7 @@ END IF
      !$omp single
      IF(.NOT.(ALLOCATED(ptr_psi))) THEN
          ALLOCATE(ptr_psi(n_active_zgem), ptr_vc(n_active_zgem), ptr_psi_result(n_active_zgem), &
-         ptr_hpsi(n_active_zgem), ptr_hpsi_nb1(n_active_zgem), ptr_sc(n_active_zgem), ptr_hc(n_active_zgem))
+         ptr_hpsi(n_active_zgem), ptr_hpsi_nb1(n_active_zgem), ptr_sc(n_active_zgem), ptr_hc(n_active_zgem), ptr_evc(n_active_zgem))
          !$acc enter data create(ptr_psi, ptr_vc, ptr_psi_result, ptr_hpsi, ptr_hpsi_nb1, ptr_sc, ptr_hc, n_active_zgem)
          prev_n_active_zgem  = n_active_zgem
      ELSE
@@ -771,7 +771,6 @@ END IF
            print *, "Not strided cublas result info: ", info
 
         END IF
-        !!$acc wait(async_id)
         !$omp end single
         !     
      ELSE
@@ -793,7 +792,6 @@ END IF
            flush(6)
 
         END IF
-        !!$acc wait(async_id)
         !$omp end single
         !
      END IF
@@ -1280,7 +1278,6 @@ END IF
      ! ... the first nvec elements with the current estimate of the
      ! ... eigenvectors;  set the basis dimension to nvec.
      !
-
      IF ( notcnv == 0 .OR. &
           nbase+notcnv > nvecx .OR. dav_iter == maxter ) THEN
         !
@@ -1289,10 +1286,118 @@ END IF
         CALL divide(inter_bgrp_comm,nbase,n_start,n_end)
         my_n = n_end - n_start + 1; !write (*,*) nbase,n_start,n_end
         
-        !$acc host_data use_device(evc, psi, vc)
-        CALL ZGEMM( 'N','N', kdim, nvec, my_n, ONE, psi(1,n_start), kdmx, vc(n_start,1), nvecx, &
-                   ZERO, evc, kdmx )
+        write(6,*) 'ALLOC POINT cegterg POINT 31'
+        flush(6)
+
+        !We need to take into account only the threads entering the current IF statement to perform correct Batched Zgemm calls:
+        final_check_iter = .TRUE.
+        final_check_arr(i_batch) = final_check_iter
+        !
+        my_n_comp(i_batch) = my_n
         
+        write(6,*) 'ALLOC POINT cegterg POINT 32'
+        flush(6)
+     END IF
+
+        !$omp barrier
+        
+        ! We need to retrieve the number of threads enteringthe current if statement:
+        n_active_final = COUNT(final_check_arr(:))
+        !  
+        
+        write(6,*) 'ALLOC POINT cegterg POINT 33'
+        flush(6)
+
+        !We need to deallocate/deallocate the arrays of pointers needed for the batched Zgemm kernel call:
+        !$omp single
+        
+        IF(n_active_final .GT. 0) THEN
+         IF(.NOT.(ALLOCATED(ptr_psi_final))) THEN
+           ALLOCATE(ptr_psi_final(n_active_final), ptr_vc_final(n_active_final), ptr_hpsi_final(n_active_final), &
+                    ptr_evc(n_active_final))
+           !$acc enter data create(ptr_psi_final, ptr_hpsi_final, ptr_evc, ptr_vc_final)
+           prev_n_active_final  = n_active_final
+         ELSE
+           IF(prev_n_active_final /= n_active_final) THEN
+             !$acc exit data delete(ptr_psi_final, ptr_hpsi_final, ptr_evc, ptr_vc_final)
+             DEALLOCATE(ptr_psi_final, ptr_vc_final, ptr_hpsi_final, ptr_evc)
+             ALLOCATE(ptr_psi_final(n_active_final), ptr_vc_final(n_active_final), ptr_hpsi_final(n_active_final), &
+                      ptr_evc(n_active_final))
+             !$acc enter data create(ptr_psi_final, ptr_hpsi_final, ptr_evc, ptr_vc_final)
+             prev_n_active_final  = n_active_final
+           END IF
+         END IF
+        
+        write(6,*) 'ALLOC POINT cegterg POINT 34'
+        flush(6)
+
+
+         IF ( uspp ) THEN
+          IF(.NOT.(ALLOCATED(ptr_spsi_final))) THEN
+            ALLOCATE(ptr_spsi_final(n_active_final))
+            !$acc enter data create(ptr_spsi_final)
+            prev_n_active_final_spsi = n_active_final
+          ELSE
+            IF(prev_n_active_final_spsi /= n_active_final) THEN
+               !$acc exit data delete(ptr_spsi_final)
+               DEALLOCATE(ptr_spsi_final)
+               ALLOCATE(ptr_spsi_final(n_active_final))
+               !$acc enter data create(ptr_spsi_final)
+               prev_n_active_final_spsi = n_active_final
+            END IF
+            !$acc wait(async_id)
+          END IF
+         END IF
+        END IF
+        !$omp end single
+
+        my_n_max = MAXVAL(my_n_comp(:))
+        
+        write(6,*) 'ALLOC POINT cegterg POINT 35'
+        flush(6)
+
+
+        IF ( final_check_iter ) THEN
+          IF ( final_check_arr(i_batch) ) THEN
+              my_slot = 1 + COUNT(final_check_arr(1:i_batch-1))
+              ptr_vc_final(my_slot) = c_devloc(vc(n_start,1))
+              ptr_psi_final(my_slot) = acc_deviceptr(psi(1,n_start))
+              IF ( uspp ) ptr_spsi_final(my_slot) = acc_deviceptr(spsi(1,n_start))
+              ptr_hpsi_final(my_slot) = acc_deviceptr(hpsi(1,n_start))
+              ptr_evc(my_slot) = acc_deviceptr(evc(1,1))
+          END IF
+        END IF
+        
+        write(6,*) 'ALLOC POINT cegterg POINT 36.1'
+        flush(6)
+        print *, "Current batch ", i_batch
+
+        !$acc wait(async_id)
+        !$omp barrier
+        
+        IF (n_active_final .GT. 0) THEN
+         !$omp single
+         !CALL ZGEMM( 'N','N', kdim, nvec, my_n, ONE, psi(1,n_start), kdmx, vc(n_start,1), nvecx, &
+         !           ZERO, evc, kdmx )
+         !$acc update device(ptr_psi_final, ptr_vc_final, ptr_evc)
+         !$acc host_data use_device(ptr_psi_final, ptr_vc_final, ptr_evc)
+         info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, nvec, my_n_max, ONE, &
+                                    ptr_psi_final, kdmx, ptr_vc_final, nvecx, ZERO, ptr_evc, kdmx, n_active_final)
+         !$acc end host_data
+        
+         print *, "Current batch ", i_batch
+
+         !$omp end single
+         !$acc wait(async_id)
+        END IF
+
+        write(6,*) 'ALLOC POINT cegterg POINT 37'
+        flush(6)
+        print *, "Current batch ", i_batch
+        
+     IF ( notcnv == 0 .OR. &
+          nbase+notcnv > nvecx .OR. dav_iter == maxter ) THEN
+        !$acc host_data use_device(evc)
         CALL mp_sum( evc, inter_bgrp_comm )
         !$acc end host_data
         !
