@@ -9,7 +9,7 @@
 !=----------------------------------------------------------------------=!
 MODULE fft_scalar_cuFFT
 !=----------------------------------------------------------------------=!
-#if defined(_OPEMP)
+#if defined(_OPENMP)
 USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
 #endif
 #ifdef __CUDA
@@ -26,15 +26,17 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
 #endif
        SAVE
        PRIVATE
-       PUBLIC :: cft_1z_gpu, cft_2xy_gpu, cfft3d_gpu, cfft3ds_gpu
+       PUBLIC :: cft_1z_gpu, cft_2xy_gpu, cfft3d_gpu, cfft3ds_gpu, cfft3d_gpu_batched, cfft3ds_gpu_batched, init_plan_cfft3d_gpu
        INTEGER, SAVE :: icurrent = 1
+       INTEGER, PUBLIC :: ind_p_arr(ndims) ! Array of pointer indices corresponding to all the possible batch n. of elements from 1 to nk_batches
+                                        ! The array is populate in the main program
        INTEGER, SAVE :: dims(4,ndims) = -1
-       !$omp threadprivate (dims, icurrent)
+       !!$omp threadprivate (dims, icurrent)
 
  !     C_POINTER, save :: fw_plan(ndims) = 0
 !      C_POINTER, save :: bw_plan(ndims) = 0
        INTEGER, SAVE :: cufft_plan_3d( ndims ) = 0
-      !$omp threadprivate (cufft_plan_3d)
+      !!$omp threadprivate (cufft_plan_3d)
 
 !=----------------------------------------------------------------------=!
    CONTAINS
@@ -692,7 +694,7 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
      !   physical dimensions of the f_d array
      !   sign of the transformation
 
-     complex(DP),device :: f_d ( ldx * ldy * ldz )
+     complex(DP),device :: f_d ( ldx * ldy * ldz ) !Modified f_d from 1D to 2D
      integer :: do_fft_y(:), do_fft_z(:)
      integer(kind = cuda_stream_kind) :: stream
      !
@@ -712,9 +714,273 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
      CALL cfft3d_gpu (f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, stream)
      return
    END SUBROUTINE cfft3ds_gpu
+!=----------------------------------------------------------------------=!
+
+!! Introduced for the batched kernel call:
+SUBROUTINE cfft3d_gpu_batched( f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, stream )
+
+  !     driver routine for 3d complex fft of lengths nx, ny, nz
+  !     input  :  f_d(ldx*ldy*ldz)  complex, transform is in-place
+  !     ldx >= nx, ldy >= ny, ldz >= nz are the physical dimensions
+  !     of the equivalent 3d array: f3d(ldx,ldy,ldz)
+  !     (ldx>nx, ldy>ny, ldz>nz may be used on some architectures
+  !      to reduce memory conflicts - not implemented for FFTW)
+  !     isign > 0 : f(G) => f(R)   ; isign < 0 : f(R) => f(G)
+  !
+  !     Up to "ndims" initializations (for different combinations of input
+  !     parameters nx,ny,nz) are stored and re-used if available
+
+     USE mytime, ONLY : clock_cuda_stream, clock_thread
+     IMPLICIT NONE
+
+     INTEGER, INTENT(IN) :: nx, ny, nz, ldx, ldy, ldz, howmany, isign
+     COMPLEX (DP), device :: f_d(:,:)
+     INTEGER(kind = cuda_stream_kind) :: stream
+     INTEGER :: i, k, j, err, idir, ip, istat
+     REAL(DP) :: tscale
+     !INTEGER, SAVE :: icurrent = 1
+     !INTEGER, SAVE :: dims(4,ndims) = -1
+     !!$omp threadprivate (dims, icurrent)
+
+!     C_POINTER, save :: fw_plan(ndims) = 0
+!     C_POINTER, save :: bw_plan(ndims) = 0
+     !INTEGER, SAVE :: cufft_plan_3d( ndims ) = 0
+     !!$omp threadprivate (cufft_plan_3d)
+
+     IF ( nx < 1 ) &
+         call fftx_error__('cfft3d',' nx is less than 1 ', 1)
+     IF ( ny < 1 ) &
+         call fftx_error__('cfft3d',' ny is less than 1 ', 1)
+     IF ( nz < 1 ) &
+         call fftx_error__('cfft3d',' nz is less than 1 ', 1)
+     IF ( nx /= ldx .or. ny /= ldy .or. nz /= ldz ) &
+         call fftx_error__('cfft3d',' leading dimensions must match data dimension ', 1)
+     !
+     !   Here initialize table only if necessary
+     !
+     !CALL lookup() ! We run this check during the initialization of Plans in the main program
+     
+     ip = ind_p_arr(howmany) !We retrieve the index pointer corresponding to the nk_batches
+     
+     IF( ip == -1 ) THEN
+
+       !   no table exist for these parameters
+       !   initialize a new one
+
+       !CALL init_plan() !We comment the call because we initialize the cfft plans through the module subroutine!
+       call fftx_error__("fft_scalar_cuFFT", "Invalid pre-initialized plan index", 1)
+       !
+     END IF
+     !
+     !   Now perform the 3D FFT using the machine specific driver
+     !
+     print * , "IP value before setting stream ", ip
+     print * , "Stream value: ", stream
+     print *, "DEBUG: cufft_plan handle = ", cufft_plan_3d(ip)
+
+     istat = cufftSetStream(cufft_plan_3d(ip), stream)
+     call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " failed to set stream ", istat)
+
+     IF( isign < 0 ) THEN
+
+        istat = cufftExecZ2Z( cufft_plan_3d(ip), f_d(1,1), f_d(1,1), CUFFT_FORWARD )
+        
+        print*, "Result of the forward FFT: ", istat
+
+        call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftExecZ2Z failed ", istat)
+
+       tscale = 1.0_DP / DBLE( nx * ny * nz )
+!$cuf kernel do(1) <<<*,(16,16,1),0,stream>>>
+        DO k=1, howmany
+           DO i=1, ldx*ldy*ldz
+              f_d( i, k ) = f_d( i, k ) * tscale
+           END DO
+        END DO
+     ELSE IF( isign > 0 ) THEN
+
+        istat = cufftExecZ2Z( cufft_plan_3d(ip), f_d(1,1), f_d(1,1), CUFFT_INVERSE )
+        call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftExecZ2Z failed ", istat)
+        
+        print*, "Result of the inverse FFT: ", istat
+
+     END IF
+
+     RETURN
+
+   CONTAINS
+
+     SUBROUTINE lookup()
+     ip = -1
+     DO i = 1, ndims
+       !   first check if there is already a table initialized
+       !   for this combination of parameters
+       IF ( ( nx == dims(1,i) ) .and. &
+            ( ny == dims(2,i) ) .and. &
+            ( nz == dims(3,i) ) .and. &
+            ( howmany == dims(4,i) ) ) THEN
+         ip = i
+         EXIT
+       END IF
+     END DO
+     END SUBROUTINE lookup
+
+     SUBROUTINE init_plan()
+       INTEGER, PARAMETER :: RANK=3
+       INTEGER :: FFT_DIM(RANK), DATA_DIM(RANK)
+       INTEGER :: STRIDE, DIST, BATCH
+
+        FFT_DIM(1) = nz
+        FFT_DIM(2) = ny
+        FFT_DIM(3) = nx
+       DATA_DIM(1) = ldz
+       DATA_DIM(2) = ldy
+       DATA_DIM(3) = ldx
+            STRIDE = 1
+              DIST = ldx*ldy*ldz
+             BATCH = howmany
+       IF( cufft_plan_3d( icurrent) /=  0) THEN
+           istat = cufftDestroy( cufft_plan_3d(icurrent) )
+           call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftDestroy failed ", istat)
+       ENDIF
+       istat = cufftPlanMany( cufft_plan_3d( icurrent), RANK, FFT_DIM, &
+                              DATA_DIM, STRIDE, DIST, &
+                              DATA_DIM, STRIDE, DIST, &
+                              CUFFT_Z2Z, BATCH)
+
+       call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftPlanMany failed ", istat)
+
+       !IF ( nx /= ldx .or. ny /= ldy .or. nz /= ldz ) &
+       !  call fftx_error__('cfft3','not implemented',1)
+       !IF( fw_plan(icurrent) /= 0 ) CALL DESTROY_PLAN_3D( fw_plan(icurrent) )
+       !IF( bw_plan(icurrent) /= 0 ) CALL DESTROY_PLAN_3D( bw_plan(icurrent) )
+       !idir = -1; CALL CREATE_PLAN_3D( fw_plan(icurrent), nx, ny, nz, idir)
+       !idir =  1; CALL CREATE_PLAN_3D( bw_plan(icurrent), nx, ny, nz, idir)
+       dims(1,icurrent) = nx; dims(2,icurrent) = ny; dims(3,icurrent) = nz
+       dims(4,icurrent) = howmany
+       ip = icurrent
+       icurrent = MOD( icurrent, ndims ) + 1
+     END SUBROUTINE init_plan
+
+   END SUBROUTINE cfft3d_gpu_batched
+
+!------------------------------------------------------------------------
+!! Introduced for the batched kernel call:
+SUBROUTINE cfft3ds_gpu_batched (f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, &
+     do_fft_z, do_fft_y, stream)
+     !
+     !     driver routine for 3d complex "reduced" fft - see cfft3d
+     !     The 3D fft are computed only on lines and planes which have
+     !     non zero elements. These lines and planes are defined by
+     !     the two integer vectors do_fft_y(nx) and do_fft_z(ldx*ldy)
+     !     (1 = perform fft, 0 = do not perform fft)
+     !     This routine is implemented only for fftw, essl, acml
+     !     If not implemented, cfft3d is called instead
+     !
+     !     NB: this version is by far much slower than the 3D FFT of the
+     !         entire data.
+     !
+     !----------------------------------------------------------------------
+     !
+     implicit none
+         INTEGER, PARAMETER  :: stdout = 6
+
+     integer :: nx, ny, nz, ldx, ldy, ldz, howmany, isign
+     !
+     !   logical dimensions of the fft
+     !   physical dimensions of the f_d array
+     !   sign of the transformation
+
+     complex(DP),device :: f_d ( ldx * ldy * ldz, howmany ) !Modified f_d from 1D to 2D
+     integer :: do_fft_y(:), do_fft_z(:)
+     integer(kind = cuda_stream_kind) :: stream
+     !
+     integer :: m, incx1, incx2
+     INTEGER :: i, k, j, err, idir, ip,  ii, jj, istat
+     REAL(DP) :: tscale
+     INTEGER, SAVE :: icurrent = 1
+     INTEGER, SAVE :: dims(3,ndims) = -1
+
+     !TYPE(C_PTR), SAVE :: fw_plan ( 3, ndims ) = C_NULL_PTR
+     !TYPE(C_PTR), SAVE :: bw_plan ( 3, ndims ) = C_NULL_PTR
+     INTEGER, SAVE :: cufft_plan_1d( 3, ndims ) = 0
+     !
+     ! cfft3d_gpu outperforms an explicit implementation of cfft3ds_gpu
+     ! which is now buried in the commit history.
+     !
+     CALL cfft3d_gpu_batched (f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, stream)
+     return
+   END SUBROUTINE cfft3ds_gpu_batched
+!-----------------------------------------------------------------------------------=!
+
+!We define the plan initialization in order to launch it at the beginning of the main program and avoid Race conditions
+SUBROUTINE init_plan_cfft3d_gpu(nx, ny, nz, ldx, ldy, ldz, howmany, ip) !We set ip as an output for the subroutine!
+       INTEGER, PARAMETER :: RANK=3
+       INTEGER :: FFT_DIM(RANK), DATA_DIM(RANK)
+       INTEGER :: STRIDE, DIST, BATCH
+       integer :: i, nx, ny, nz, ldx, ldy, ldz, howmany
+       integer :: ip, istat
+       
+       call lookup()
+
+       IF (ip /= -1) THEN
+          call fftx_error__("fft_scalar_cuFFT", "Error in initialization of FFT plans", 1)
+          RETURN
+       END IF
+
+        FFT_DIM(1) = nz
+        FFT_DIM(2) = ny
+        FFT_DIM(3) = nx
+       DATA_DIM(1) = ldz
+       DATA_DIM(2) = ldy
+       DATA_DIM(3) = ldx
+            STRIDE = 1
+              DIST = ldx*ldy*ldz
+             BATCH = howmany
+       IF( cufft_plan_3d( icurrent) /=  0) THEN
+           istat = cufftDestroy( cufft_plan_3d(icurrent) )
+           call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftDestroy failed ", istat)
+       ENDIF
+       istat = cufftPlanMany( cufft_plan_3d( icurrent), RANK, FFT_DIM, &
+                              DATA_DIM, STRIDE, DIST, &
+                              DATA_DIM, STRIDE, DIST, &
+                              CUFFT_Z2Z, BATCH)
+       print *, "INIT DEBUG: batch =", howmany, "slot =", icurrent, "handle =", cufft_plan_3d(icurrent), "status =", istat
+
+       call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftPlanMany failed ", istat)
+
+       !IF ( nx /= ldx .or. ny /= ldy .or. nz /= ldz ) &
+       !  call fftx_error__('cfft3','not implemented',1)
+       !IF( fw_plan(icurrent) /= 0 ) CALL DESTROY_PLAN_3D( fw_plan(icurrent) )
+       !IF( bw_plan(icurrent) /= 0 ) CALL DESTROY_PLAN_3D( bw_plan(icurrent) )
+       !idir = -1; CALL CREATE_PLAN_3D( fw_plan(icurrent), nx, ny, nz, idir)
+       !idir =  1; CALL CREATE_PLAN_3D( bw_plan(icurrent), nx, ny, nz, idir)
+       dims(1,icurrent) = nx; dims(2,icurrent) = ny; dims(3,icurrent) = nz
+       dims(4,icurrent) = howmany
+       ip = icurrent
+       icurrent = MOD( icurrent, ndims ) + 1
+      
+       RETURN
+
+      CONTAINS
+
+      SUBROUTINE lookup()
+        ip = -1
+        DO i = 1, ndims
+          !   first check if there is already a table initialized
+          !   for this combination of parameters
+          IF  ( ( nx == dims(1,i) ) .and. &
+              ( ny == dims(2,i) ) .and. &
+              ( nz == dims(3,i) ) .and. &
+              ( howmany == dims(4,i) ) ) THEN
+            ip = i
+            EXIT
+          END IF
+        END DO
+      END SUBROUTINE lookup
+
+     END SUBROUTINE init_plan_cfft3d_gpu
+
 #endif
-!=----------------------------------------------------------------------=!
- END MODULE fft_scalar_cuFFT
-!=----------------------------------------------------------------------=!
 
-
+END MODULE fft_scalar_cuFFT
+!=----------------------------------------------------------------------=!

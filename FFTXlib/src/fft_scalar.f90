@@ -45,7 +45,7 @@
      PRIVATE
      PUBLIC :: cft_1z, cft_2xy, cfft3d, cfft3ds
 #if defined(__CUDA)
-     PUBLIC :: cft_1z_gpu, cft_2xy_gpu, cfft3d_gpu, cfft3ds_gpu
+     PUBLIC :: cft_1z_gpu, cft_2xy_gpu, cfft3d_gpu, cfft3ds_gpu, cfft3d_gpu_batched, cfft3ds_gpu_batched, init_plan_cfft3d_gpu
 #endif
 
    END MODULE fft_scalar

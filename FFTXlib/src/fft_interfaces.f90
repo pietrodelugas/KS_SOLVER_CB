@@ -51,6 +51,19 @@ MODULE fft_interfaces
        INTEGER(kind = cuda_stream_kind), OPTIONAL, INTENT(IN) :: stream
        COMPLEX(DP), DEVICE :: f_d(:)
      END SUBROUTINE invfft_y_gpu
+
+     SUBROUTINE invfft_y_gpu_batched( grid_type, f_d, dfft, howmany, stream )
+       USE fft_types,  ONLY: fft_type_descriptor
+       USE fft_param,  ONLY: DP
+       USE cudafor
+       IMPLICIT NONE
+       CHARACTER(LEN=*),  INTENT(IN) :: grid_type
+       TYPE(fft_type_descriptor), INTENT(IN) :: dfft
+       INTEGER, OPTIONAL, INTENT(IN) :: howmany
+       INTEGER(kind = cuda_stream_kind), OPTIONAL, INTENT(IN) :: stream
+       COMPLEX(DP), DEVICE :: f_d(:,:) !In this case f_d is of dimension 2
+     END SUBROUTINE invfft_y_gpu_batched
+
 #endif
   END INTERFACE
 
@@ -76,6 +89,19 @@ MODULE fft_interfaces
        INTEGER(kind = cuda_stream_kind), OPTIONAL, INTENT(IN) :: stream
        COMPLEX(DP), DEVICE :: f_d(:)
      END SUBROUTINE fwfft_y_gpu
+
+     SUBROUTINE fwfft_y_gpu_batched( grid_type, f_d, dfft, howmany, stream )
+       USE fft_types,  ONLY: fft_type_descriptor
+       USE fft_param,  ONLY: DP
+       USE cudafor
+       IMPLICIT NONE
+       CHARACTER(LEN=*), INTENT(IN) :: grid_type
+       TYPE(fft_type_descriptor), INTENT(IN) :: dfft
+       INTEGER, OPTIONAL, INTENT(IN) :: howmany
+       INTEGER(kind = cuda_stream_kind), OPTIONAL, INTENT(IN) :: stream
+       COMPLEX(DP), DEVICE :: f_d(:,:) !In this case f_d is of dim. 2
+     END SUBROUTINE fwfft_y_gpu_batched
+
 #endif
   END INTERFACE
 
