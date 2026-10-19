@@ -22,7 +22,7 @@ MODULE cegterg_mod
   
   CONTAINS
 !----------------------------------------------------------------------------
-SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
+SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, evc_comp, done_comp, final_check_arr, &
@@ -30,7 +30,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                     psi_comp, hpsi_comp, spsi_comp, hc_comp_zgem, sc_comp_zgem, vc_comp_zgem, kdim_comp, notcnv_comp, &
                     ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
                     ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, &
-                    psi_fft_comp, hpsi_fft_comp )
+                    psi_fft_comp, hpsi_fft_comp, npw_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -131,6 +131,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
                                                 ptr_spsi_final(:)
   COMPLEX(DP), INTENT(INOUT) :: psi_fft_comp(npwx*npol, nvecx, n_k) !Shared array for the fft batched call in the initial part
   COMPLEX(DP), INTENT(INOUT) :: hpsi_fft_comp(npwx*npol, nvecx, n_k) !Shared array for the fft batched call in the initial part
+  INTEGER, INTENT(INOUT) :: npw_comp(n_k) !Shared array for the fft batched call in the initial part
   !
   !
   ! ... LOCAL variables
@@ -210,7 +211,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   REAL(DP), EXTERNAL :: MYDDOT_VECTOR_GPU
   !$acc routine(MYDDOT_VECTOR_GPU) vector
   !
-  EXTERNAL  h_psi_ptr,    s_psi_ptr,    g_psi_ptr
+  EXTERNAL  h_psi_ptr,    s_psi_ptr,    g_psi_ptr,  h_psi_ptr  !! We add the h_psi_ptr_old to keep the iterative fft call correctly executed
     ! h_psi_ptr(npwx,npw,nvec,psi,hpsi,i_batch)
     !     calculates H|psi>
     ! s_psi_ptr(npwx,npw,nvec,spsi,i_batch)
@@ -303,24 +304,35 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr, uspp, g_psi_ptr, &
   !
   print * , "DEBUGG POINT CEGTERG 1"
   
-  !$acc wait
-  !$omp barrier
-
+  !$acc kernels async(async_id)
   psi_fft_comp(:,:,i_batch) = psi(1:(npwx*npol), 1:nvecx)
   hpsi_fft_comp(:,:,i_batch) = hpsi(1:(npwx*npol), 1:nvecx)
+  npw_comp(i_batch) = npw
+  !$acc end kernels
+
+  !$acc wait(async_id)
   !$omp barrier
  
   print * , "DEBUGG POINT CEGTERG 2"
 
-  !$omp single
-  CALL h_psi_ptr( npwx, npw, nvec, psi_fft_comp, hpsi_fft_comp, i_batch, n_k )
-  !$omp end single
+  !$omp master
+  CALL h_psi_ptr( npwx, npw_comp, nvec, psi_fft_comp, hpsi_fft_comp, i_batch, n_k )
+  !$omp end master
   !
+  !$acc wait(async_id)
+  !$omp barrier
+
   print * , "DEBUGG POINT CEGTERG 3"
 
-  hpsi(:,:) = hpsi_fft_comp(:,:,i_batch)
-  !
+  !$acc kernels async(async_id)
+  hpsi(:,:) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
+  psi(:,:) = psi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
+  !$acc end kernels
+
   print * , "DEBUGG POINT CEGTERG4"
+  
+  !$acc wait
+  !$omp barrier
 
   nhpsi = nhpsi + nvec
   !
@@ -968,9 +980,25 @@ IF ( .NOT. my_done ) THEN
      flush(6)
 
      ! ... here compute the hpsi and spsi of the new functions
+     
+     !!$acc wait(async_id)
+     !!$omp barrier
+     
+     !!$acc kernels async(async_id)
+     !psi_fft_comp(:,:,i_batch) = psi(1:(npwx*npol), 1:nvecx)
+     !hpsi_fft_comp(:,:,i_batch) = hpsi(1:(npwx*npol), 1:nvecx)
+     !!$acc end kernels
+  
+     !print * , "DEBUGG POINT CEGTERG 21.1"
      !
-     CALL h_psi_ptr( npwx, npw, notcnv, psi(1,nb1), hpsi(1,nb1), i_batch ) ; nhpsi = nhpsi + notcnv
+     CALL h_psi_ptr_old( npwx, npw, notcnv, psi(1,nb1), hpsi(1,nb1), i_batch ) ; nhpsi = nhpsi + notcnv
      !
+     
+     !!$acc kernels async(async_id)
+     !hpsi(:,:) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,i_batch) 
+     !psi(:,:) = psi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
+     !!$acc end kernels
+     
      IF ( uspp ) CALL s_psi_ptr( npwx, npw, notcnv, psi(1,nb1), spsi(1,nb1), i_batch )
      !
      ! ... update the reduced hamiltonian

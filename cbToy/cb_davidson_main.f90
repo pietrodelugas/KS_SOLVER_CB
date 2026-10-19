@@ -53,10 +53,12 @@ program cb_davidson_main
    COMPLEX(DP), ALLOCATABLE :: psi_comp(:,:,:), hpsi_comp(:,:,:), spsi_comp(:,:,:)
    COMPLEX(DP), ALLOCATABLE :: hc_c_zgem(:,:,:), sc_c_zgem(:,:,:), vc_c_zgem(:,:,:)
    COMPLEX(DP), ALLOCATABLE :: psi_fft_comp(:,:,:), hpsi_fft_comp(:,:,:)
+   INTEGER, ALLOCATABLE :: npw_comp(:)
    INTEGER, ALLOCATABLE :: kdim_comp(:)
    INTEGER, ALLOCATABLE :: notcnv_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
    INTEGER, ALLOCATABLE :: my_n_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
    INTEGER :: npwx_npol
+   INTEGER :: if1, if2, if3 !! Indices declared to manage the do loops for the initialization of igk_batched and evc_batched
    INTEGER :: ind_p !Index_pointer for the cuFFT kernels
    TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
                                   ptr_hpsi_nb1(:), ptr_evc(:), ptr_psi_final(:), ptr_hpsi_final(:), ptr_spsi_final(:), ptr_vc_final(:)
@@ -68,7 +70,7 @@ program cb_davidson_main
                                                     ! band group or at the parallelization level above.
 #endif
 !------------------------------------------------------------------------
-   external my_h_psi_batched, cb_h_psi, cb_s_psi_batched, cb_g_psi_batched
+   external my_h_psi_batched, cb_h_psi, cb_s_psi_batched, cb_g_psi_batched, my_h_psi_batched_old !!We add my_h_psi_batched for the fft in the iterat.
    external cb_s_psi, cb_g_psi
 !  subroutine cb_h_psi(npwx,npw,nvec,psi,hpsi)  computes H*psi
 !  subroutine cb_s_psi(npwx,npw,nvec,psi,spsi)  computes S*psi (if needed)
@@ -118,7 +120,7 @@ program cb_davidson_main
    call ggen(gamma_only)
    call set_cb_potential
    
-   print *, "Vloc values: ", vloc(1), vloc(2)
+!   print *, "Vloc values: ", vloc(1), vloc(2)
 
    if (use_overlap) write(*,*) '** TEST:  CB hamiltonian modified so as to need an overlap matrix **'
    overlap = use_overlap
@@ -133,6 +135,7 @@ program cb_davidson_main
       ind_p_arr(i_f) = ind_p !We store the values of the index pointers corresponding to each i_f (batch size or how_many param.)
    end do
 #endif
+
    !
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
    allocate( fft_array_batched(dfft%nnr, nk_batches), aux_batched(dfft%nnr, nk_batches) )
@@ -159,6 +162,7 @@ program cb_davidson_main
    allocate( hc_c_zgem(nbndx, nbndx, nk_batches), sc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    allocate( vc_c_zgem(nbndx, nbndx, nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    allocate( psi_fft_comp(npwx_npol,nbndx,nk_batches), hpsi_fft_comp(npwx_npol,nbndx,nk_batches) ) !We allocate shared arrays for fft in the init. part
+   allocate( npw_comp(nk_batches) )
    allocate( ptr_hc(nk_batches), ptr_vc(nk_batches), ptr_sc(nk_batches), ptr_psi(nk_batches), ptr_evc(nk_batches) ) !We allocate the arrays shared for the zgemm batched 
    allocate( ptr_hpsi(nk_batches), ptr_hpsi_nb1(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    !allocate(ptr_psi_final(nk_batches), ptr_hpsi_final(nk_batches), ptr_spsi_final(nk_batches), ptr_vc_final(nk_batches)) !We allocate the arrays shared for the zgemm batched calls in the final part of the cegterg
@@ -168,8 +172,24 @@ program cb_davidson_main
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c, evc_c)
    !$acc enter data create(psi_comp, hpsi_comp, spsi_comp)
    !$acc enter data create(psi_fft_comp, hpsi_fft_comp)
+   !$acc enter data create(npw_comp)
    !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) !! We commented the line because we manage the 
                                                                                 !! allocation/deallocation inside the cegterg subroutine!
+
+   !!!! We initialize the igk_batches and the evc_batches before the loops created for the cegterg call so we can implement the batched cuFFT call
+   ! We can do this because nk_batches is an integer that is known because it is given in input
+   !do if1 = 1,nk_batches
+   !   do if2 = 1,nks
+   !        call init_k(if2, if1)
+   !   end do
+   !end do
+   !!$acc update device(igk_batched(:,1:nk_batches)) async(clock_thread)
+   !!!!!!!!
+
+   !do if3 = 1,nk_batches
+   !   call init_random_wfcs(npw_batched(if3), npwx, nbnd, evc_batched(1,1,if3),if3)
+   !end do
+   !!$acc update device(evc_batched(:,:,1:nk_batches)) async(clock_thread)
 
    do ik =1,nks, nk_batches
      ! actual number of k-points in this batch: may be less than nk_batches
@@ -180,6 +200,17 @@ program cb_davidson_main
      n_k = min(nk_batches, nks - ik +1)
      
      done_comp = .FALSE.
+     
+     !!!! We initialize the igk_batches and the evc_batches before the loops created for the cegterg call so we can implement the batched cuFFT call
+     do i_batch = 1, n_k
+        clock_thread = i_batch
+        current_k = ik + i_batch - 1
+        call init_k(current_k,i_batch)
+        !$acc update device(igk_batched(:,i_batch)) async(clock_thread)
+        call init_random_wfcs(npw_batched(i_batch), npwx, nbnd, evc_batched(1,1,i_batch),i_batch)
+        !$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
+     end do
+     !
 
      call start_clock('davidson')
      !CALL nvtxRangePush("Cegterg")
@@ -196,23 +227,27 @@ program cb_davidson_main
 
        print '("First loop, batch ",3I5)', i_batch, clock_thread, omp_get_thread_num()  
        current_k = ik + i_batch -1   
+       
+       !We comment this line because we initialized outside the loops
+       !call init_k(if2, if1)
+       !!$acc update device(igk_batched(:,i_batch)) async(clock_thread)
+       !
+       !call init_random_wfcs(npw_batched(if3), npwx, nbnd, evc_batched(1,1,if3),if3)  
+       !!$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
+       !
 
-       call init_k(current_k, i_batch) 
-       !$acc update device(igk_batched(:,i_batch)) async(clock_thread)
-       call init_random_wfcs(npw_batched(i_batch), npwx, nbnd, evc_batched(1,1,i_batch),i_batch)  
-       !$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
        !$acc host_data use_device(eig_batched(1,i_batch))
 #if defined(__INTERCALATE_CEGTERG)
        call omp_set_lock(cegterg_locker) 
 #endif
-       call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, &
+       call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, my_h_psi_batched_old, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
                       nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, evc_c, done_comp, final_check_arr, &
                       hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
                       psi_comp, hpsi_comp, spsi_comp, hc_c_zgem, sc_c_zgem, vc_c_zgem, kdim_comp, notcnv_comp, &
                       ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                      ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, psi_fft_comp, hpsi_fft_comp )
+                      ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, psi_fft_comp, hpsi_fft_comp, npw_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
@@ -257,6 +292,7 @@ program cb_davidson_main
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
    !$acc exit data delete(hc_c_zgem, sc_c_zgem, vc_c_zgem)
    !$acc exit data delete(psi_fft_comp, hpsi_fft_comp)
+   !$acc exit data delete(npw_comp)
    !$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc)
    !!$acc exit data delete(ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, ptr_evc)
    deallocate( eig )
@@ -271,6 +307,7 @@ program cb_davidson_main
    deallocate( psi_comp, hpsi_comp, spsi_comp )
    deallocate( hc_c_zgem, sc_c_zgem, vc_c_zgem ) !We deallocate the arrays shared for the zgemm batched calls
    deallocate( psi_fft_comp, hpsi_fft_comp )
+   deallocate( npw_comp )
    deallocate( kdim_comp )
    deallocate( notcnv_comp )
    deallocate( my_n_comp )

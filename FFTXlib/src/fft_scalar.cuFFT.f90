@@ -27,6 +27,7 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
        SAVE
        PRIVATE
        PUBLIC :: cft_1z_gpu, cft_2xy_gpu, cfft3d_gpu, cfft3ds_gpu, cfft3d_gpu_batched, cfft3ds_gpu_batched, init_plan_cfft3d_gpu
+       INTEGER :: istat !! Added for the cudaDeviceSynchronize
        INTEGER, SAVE :: icurrent = 1
        INTEGER, PUBLIC :: ind_p_arr(ndims) ! Array of pointer indices corresponding to all the possible batch n. of elements from 1 to nk_batches
                                         ! The array is populate in the main program
@@ -37,7 +38,14 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
 !      C_POINTER, save :: bw_plan(ndims) = 0
        INTEGER, SAVE :: cufft_plan_3d( ndims ) = 0
       !!$omp threadprivate (cufft_plan_3d)
-
+       
+       !!VARIABLES INTRODUCED FOR THE PREVIOUS VERSION OF THE CODE BEFORE THE _batched subroutines creation:
+       INTEGER, SAVE :: icurrent_old = 1
+       INTEGER, SAVE :: dims_old(4,ndims) = -1
+       !$omp threadprivate (dims_old, icurrent_old)
+       INTEGER, SAVE :: cufft_plan_3D_old( ndims ) = 0
+       !$omp threadprivate (cufft_plan_3d_old)
+       !!!!
 !=----------------------------------------------------------------------=!
    CONTAINS
 !=----------------------------------------------------------------------=!
@@ -583,19 +591,29 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
 
        !   no table exist for these parameters
        !   initialize a new one
-
+       print *, "I'M INSIDE THE IF CHECKING THe IP"
        CALL init_plan()
-
+       
      END IF
      !
      !   Now perform the 3D FFT using the machine specific driver
      !
-     istat = cufftSetStream(cufft_plan_3d(ip), stream)
+     !print *, "IP value for subr. not batched", ip
+     !print *, "Stream value for subr. not batche", stream
+     
+     istat =  cudaDeviceSynchronize()
+     
+     ip = 1
+
+     istat = cufftSetStream(cufft_plan_3d_old(ip), stream)
+     
      call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " failed to set stream ", istat)
+     
+     istat =  cudaDeviceSynchronize()
 
      IF( isign < 0 ) THEN
 
-        istat = cufftExecZ2Z( cufft_plan_3d(ip), f_d(1), f_d(1), CUFFT_FORWARD )
+        istat = cufftExecZ2Z( cufft_plan_3d_old(ip), f_d(1), f_d(1), CUFFT_FORWARD )
         call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftExecZ2Z failed ", istat)
 
        tscale = 1.0_DP / DBLE( nx * ny * nz )
@@ -606,8 +624,10 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
 
      ELSE IF( isign > 0 ) THEN
 
-        istat = cufftExecZ2Z( cufft_plan_3d(ip), f_d(1), f_d(1), CUFFT_INVERSE )
+        istat = cufftExecZ2Z( cufft_plan_3d_old(ip), f_d(1), f_d(1), CUFFT_INVERSE )
         call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftExecZ2Z failed ", istat)
+        
+        istat =  cudaDeviceSynchronize()
 
      END IF
 
@@ -620,10 +640,10 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
      DO i = 1, ndims
        !   first check if there is already a table initialized
        !   for this combination of parameters
-       IF ( ( nx == dims(1,i) ) .and. &
-            ( ny == dims(2,i) ) .and. &
-            ( nz == dims(3,i) ) .and. &
-            ( howmany == dims(4,i) ) ) THEN
+       IF ( ( nx == dims_old(1,i) ) .and. &
+            ( ny == dims_old(2,i) ) .and. &
+            ( nz == dims_old(3,i) ) .and. &
+            ( howmany == dims_old(4,i) ) ) THEN
          ip = i
          EXIT
        END IF
@@ -644,11 +664,11 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
             STRIDE = 1
               DIST = ldx*ldy*ldz
              BATCH = howmany
-       IF( cufft_plan_3d( icurrent) /=  0) THEN
-           istat = cufftDestroy( cufft_plan_3d(icurrent) )
+       IF( cufft_plan_3d_old( icurrent_old) /=  0) THEN
+           istat = cufftDestroy( cufft_plan_3d_old(icurrent_old) )
            call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftDestroy failed ", istat)
        ENDIF
-       istat = cufftPlanMany( cufft_plan_3d( icurrent), RANK, FFT_DIM, &
+       istat = cufftPlanMany( cufft_plan_3d_old( icurrent_old), RANK, FFT_DIM, &
                               DATA_DIM, STRIDE, DIST, &
                               DATA_DIM, STRIDE, DIST, &
                               CUFFT_Z2Z, BATCH) 
@@ -661,10 +681,10 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
        !IF( bw_plan(icurrent) /= 0 ) CALL DESTROY_PLAN_3D( bw_plan(icurrent) )
        !idir = -1; CALL CREATE_PLAN_3D( fw_plan(icurrent), nx, ny, nz, idir)
        !idir =  1; CALL CREATE_PLAN_3D( bw_plan(icurrent), nx, ny, nz, idir)
-       dims(1,icurrent) = nx; dims(2,icurrent) = ny; dims(3,icurrent) = nz
-       dims(4,icurrent) = howmany
-       ip = icurrent
-       icurrent = MOD( icurrent, ndims ) + 1
+       dims_old(1,icurrent_old) = nx; dims_old(2,icurrent_old) = ny; dims_old(3,icurrent_old) = nz
+       dims_old(4,icurrent_old) = howmany
+       ip = icurrent_old
+       icurrent_old = MOD( icurrent_old, ndims ) + 1
      END SUBROUTINE init_plan
 
    END SUBROUTINE cfft3d_gpu
@@ -774,23 +794,27 @@ SUBROUTINE cfft3d_gpu_batched( f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, s
      !
      !   Now perform the 3D FFT using the machine specific driver
      !
-     print * , "IP value before setting stream ", ip
-     print * , "Stream value: ", stream
-     print *, "DEBUG: cufft_plan handle = ", cufft_plan_3d(ip)
+     !print * , "IP value before setting stream ", ip
+     !print * , "Stream value: ", stream
+     !print *, "DEBUG: cufft_plan handle = ", cufft_plan_3d(ip)
+     
+     istat =  cudaDeviceSynchronize()
 
      istat = cufftSetStream(cufft_plan_3d(ip), stream)
-     call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " failed to set stream ", istat)
+     call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu_batched ", " failed to set stream ", istat)
+     
+     istat = cudaDeviceSynchronize()
 
      IF( isign < 0 ) THEN
 
         istat = cufftExecZ2Z( cufft_plan_3d(ip), f_d(1,1), f_d(1,1), CUFFT_FORWARD )
         
-        print*, "Result of the forward FFT: ", istat
+        !print*, "Result of the forward FFT: ", istat
 
-        call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftExecZ2Z failed ", istat)
+        call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu_batched ", " cufftExecZ2Z failed ", istat)
 
        tscale = 1.0_DP / DBLE( nx * ny * nz )
-!$cuf kernel do(1) <<<*,(16,16,1),0,stream>>>
+!$cuf kernel do(2) <<<*,(16,16,1),0,stream>>>
         DO k=1, howmany
            DO i=1, ldx*ldy*ldz
               f_d( i, k ) = f_d( i, k ) * tscale
@@ -799,9 +823,9 @@ SUBROUTINE cfft3d_gpu_batched( f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, s
      ELSE IF( isign > 0 ) THEN
 
         istat = cufftExecZ2Z( cufft_plan_3d(ip), f_d(1,1), f_d(1,1), CUFFT_INVERSE )
-        call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftExecZ2Z failed ", istat)
+        call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu_batched ", " cufftExecZ2Z failed ", istat)
         
-        print*, "Result of the inverse FFT: ", istat
+        !print*, "Result of the inverse FFT: ", istat
 
      END IF
 
@@ -958,7 +982,7 @@ SUBROUTINE init_plan_cfft3d_gpu(nx, ny, nz, ldx, ldy, ldz, howmany, ip) !We set 
        dims(4,icurrent) = howmany
        ip = icurrent
        icurrent = MOD( icurrent, ndims ) + 1
-      
+       print *, "Icurrent value: ", icurrent 
        RETURN
 
       CONTAINS
