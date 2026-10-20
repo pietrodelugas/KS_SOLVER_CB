@@ -1,13 +1,13 @@
-subroutine my_h_psi_batched(npwx, npw_comp, nbnd, psi, hpsi, i_batch, nk_batches)
+subroutine my_h_psi_batched(npwx, npw_comp, nbndx, nbnd, psi, hpsi, i_batch, nk_batches)
   use iso_fortran_env, only: dp=> real64
   use cb_module, only: ekin_batched, vloc, igk_batched, dfft, fft_array_batched, aux_batched
   use fft_interfaces, only: fwfft, invfft 
   use mytime, only: clock_thread, fftw_locker
   use omp_lib, only: omp_set_lock, omp_unset_lock
   implicit none 
-  integer,intent(in) :: npwx, nbnd, i_batch !,npw
+  integer,intent(in) :: npwx, nbnd, i_batch, nbndx !,npw
   integer,intent(in) :: npw_comp(nk_batches)
-  complex(dp) :: psi(npwx, nbnd, nk_batches), hpsi(npwx, nbnd, nk_batches) !psi(npwx, nbnd), hpsi(npwx, nbnd) ! We make the arrays as assumed sized arguments
+  complex(dp) :: psi(npwx, nbndx, nk_batches), hpsi(npwx, nbndx, nk_batches) !psi(npwx, nbnd), hpsi(npwx, nbnd) ! We make the arrays as assumed sized arguments
   !complex(dp), optional :: psi2D(npw,nbnd), hpsi2D(npw,nbnd) !psi(npwx, nbnd), hpsi(npwx, nbnd) ! We make the arrays as assumed sized arguments
   integer, intent(in) :: nk_batches !! We include an argument for the the size of the batch
   !
@@ -15,7 +15,7 @@ subroutine my_h_psi_batched(npwx, npw_comp, nbnd, psi, hpsi, i_batch, nk_batches
   
   print *, "First my_h_psi_batched point : 1"
 
-  !$acc data present(psi, hpsi, npw_comp, igk_batched, fft_array_batched) async(clock_thread)
+  !$acc data present(psi, hpsi, npw_comp) async(clock_thread)
   do ibnd =1, nbnd
         !print *, "First my_h_psi_batched point: 2"
         !print *, "Ibatch ! : ", i_batch
@@ -42,9 +42,9 @@ subroutine my_h_psi_batched(npwx, npw_comp, nbnd, psi, hpsi, i_batch, nk_batches
         !print *, "my_h_psi_batched point: 5"
         !print *, "Ibatch ! : ", i_batch
 
-        !!$acc host_data use_device(fft_array_batched)
+        !$acc host_data use_device(fft_array_batched)
         call invfft( 'Wave', fft_array_batched(:,:), dfft, nk_batches)
-        !!$acc end host_data
+        !$acc end host_data
     
         !print *, "my_h_psi_batched point: 6"
         !print *, "Ibatch ! : ", i_batch
@@ -63,9 +63,9 @@ subroutine my_h_psi_batched(npwx, npw_comp, nbnd, psi, hpsi, i_batch, nk_batches
 
         !call omp_set_lock(fftw_locker) 
         !!$acc host_data use_device(fft_array_batched) 
-        !!$acc host_data use_device(fft_array_batched) 
+        !$acc host_data use_device(fft_array_batched) 
         call fwfft('Wave', fft_array_batched(:,:), dfft, nk_batches) 
-        !!$acc end host_data
+        !$acc end host_data
     
         !print *, "my_h_psi_batched point: 8"
         !print *, "Ibatch ! : ", i_batch
@@ -84,6 +84,8 @@ subroutine my_h_psi_batched(npwx, npw_comp, nbnd, psi, hpsi, i_batch, nk_batches
     
   end do
   !$acc end data
+  
+  !$acc wait(clock_thread)
 
   !print *, "my_h_psi_batched point: 9"
 

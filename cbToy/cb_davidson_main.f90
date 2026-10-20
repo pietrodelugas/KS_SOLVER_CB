@@ -129,6 +129,7 @@ program cb_davidson_main
    
    !3D FFT plans initialization:
 #if defined(__CUDA)
+   dim_fft = dfft%nnr !We populate the module variable
    do i_f = 1, nk_batches
       call init_plan_cfft3d_gpu(dfft%nr1, dfft%nr2, dfft%nr3, &
                                 dfft%nr1x,dfft%nr2x,dfft%nr3x, i_f, ind_p)

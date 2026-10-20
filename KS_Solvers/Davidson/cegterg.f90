@@ -316,7 +316,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
   print * , "DEBUGG POINT CEGTERG 2"
 
   !$omp master
-  CALL h_psi_ptr( npwx, npw_comp, nvec, psi_fft_comp, hpsi_fft_comp, i_batch, n_k )
+  CALL h_psi_ptr( npwx, npw_comp, nvecx, nvec, psi_fft_comp, hpsi_fft_comp, i_batch, n_k )
   !$omp end master
   !
   !$acc wait(async_id)
@@ -331,7 +331,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
 
   print * , "DEBUGG POINT CEGTERG4"
   
-  !$acc wait
+  !$acc wait(async_id)
   !$omp barrier
 
   nhpsi = nhpsi + nvec
