@@ -5,6 +5,8 @@ set(src_cbops
    cb_s_psi.f90
    my_h_psi.f90
    my_h_psi_batched.f90
+   my_h_psi_batched_old.f90
+   my_h_psi_batched_iter.f90
    cb_s_psi_batched.f90 
    cb_g_psi_batched.f90)
 qe_add_library(cb_ops ${src_cbops}) 

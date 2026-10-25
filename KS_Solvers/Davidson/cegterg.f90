@@ -1,4 +1,4 @@
-!
+!:/
 ! Copyright (C) 2001-2015 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
@@ -22,7 +22,7 @@ MODULE cegterg_mod
   
   CONTAINS
 !----------------------------------------------------------------------------
-SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
+SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, &
                     e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, evc_comp, done_comp, final_check_arr, &
@@ -30,7 +30,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
                     psi_comp, hpsi_comp, spsi_comp, hc_comp_zgem, sc_comp_zgem, vc_comp_zgem, kdim_comp, notcnv_comp, &
                     ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
                     ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, &
-                    psi_fft_comp, hpsi_fft_comp, npw_comp )
+                    psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -132,6 +132,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
   COMPLEX(DP), INTENT(INOUT) :: psi_fft_comp(npwx*npol, nvecx, n_k) !Shared array for the fft batched call in the initial part
   COMPLEX(DP), INTENT(INOUT) :: hpsi_fft_comp(npwx*npol, nvecx, n_k) !Shared array for the fft batched call in the initial part
   INTEGER, INTENT(INOUT) :: npw_comp(n_k) !Shared array for the fft batched call in the initial part
+  INTEGER, INTENT(INOUT) :: nb1_comp(n_k) !Ahared array for the fft batched call in the iterative part!
+  INTEGER, INTENT(INOUT) :: slot2batch(n_k)
   !
   !
   ! ... LOCAL variables
@@ -175,6 +177,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
   !REAL(DP), ALLOCATABLE :: ew_comp_itr_loc(:,:) !shared reduced eigenvalues for the iterative part
   INTEGER :: active_map(n_k)
   INTEGER :: my_slot ! Added variable for the currency of the threads among the threads not converged!!
+  INTEGER :: my_slot_fft
   INTEGER :: n_active ! Added for estimate the threads not converged yet
   INTEGER :: nbase_max ! Declared nbase_max as private for each thread
   INTEGER, SAVE :: prev_nbase_max = -1 !Variable declared to check variations of nbase_max within the iterative part
@@ -211,7 +214,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_old, &
   REAL(DP), EXTERNAL :: MYDDOT_VECTOR_GPU
   !$acc routine(MYDDOT_VECTOR_GPU) vector
   !
-  EXTERNAL  h_psi_ptr,    s_psi_ptr,    g_psi_ptr,  h_psi_ptr  !! We add the h_psi_ptr_old to keep the iterative fft call correctly executed
+  EXTERNAL  h_psi_ptr,    s_psi_ptr,    g_psi_ptr,  h_psi_ptr_iter  !! We add the h_psi_ptr_old to keep the iterative fft call correctly executed
     ! h_psi_ptr(npwx,npw,nvec,psi,hpsi,i_batch)
     !     calculates H|psi>
     ! s_psi_ptr(npwx,npw,nvec,spsi,i_batch)
@@ -981,24 +984,58 @@ IF ( .NOT. my_done ) THEN
 
      ! ... here compute the hpsi and spsi of the new functions
      
-     !!$acc wait(async_id)
-     !!$omp barrier
+END IF
      
-     !!$acc kernels async(async_id)
-     !psi_fft_comp(:,:,i_batch) = psi(1:(npwx*npol), 1:nvecx)
-     !hpsi_fft_comp(:,:,i_batch) = hpsi(1:(npwx*npol), 1:nvecx)
-     !!$acc end kernels
-  
-     !print * , "DEBUGG POINT CEGTERG 21.1"
+     !$acc wait(async_id)
+     !$omp barrier
+     
+     n_active = COUNT(.NOT. done_comp(1:n_k))
+     my_slot_fft = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
+     
+     if (.not. my_done) then
+     !$acc kernels async(async_id)
+     psi_fft_comp(:,:,my_slot_fft) = psi(1:(npwx*npol), 1:nvecx)
+     hpsi_fft_comp(:,:,my_slot_fft) = hpsi(1:(npwx*npol), 1:nvecx)
+     npw_comp(my_slot_fft) = npw
+     notcnv_comp(my_slot_fft) = notcnv
+     nb1_comp(my_slot_fft) = nb1
+     slot2batch(my_slot_fft)  = i_batch
+     !$acc end kernels
+     end if
+ 
+     !$acc wait(async_id)
+     !$omp barrier
+     
+     !$omp single
+     CALL h_psi_ptr_iter(npwx, npw_comp, nvecx, notcnv_comp, nb1_comp, psi_fft_comp, hpsi_fft_comp, i_batch, n_active, slot2batch)
+     !!$acc wait
+     !$omp end single
+
+     !$acc wait(async_id)
+     !$omp barrier
+ 
+     print * , "DEBUGG POINT CEGTERG 21.4"
+     
+     !nhpsi = nhpsi + notcnv
+
+IF ( .NOT. my_done ) THEN
+     
+     nhpsi = nhpsi + notcnv
+
+     !$acc kernels async(async_id)
+     hpsi(:,:) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,my_slot_fft)
+     psi(:,:) = psi_fft_comp(1:(npwx*npol),1:nvecx,my_slot_fft)
+     !$acc end kernels
+END IF 
+     print * , "DEBUGG POINT CEGTERG 21.5"
+     
+     !$acc wait(async_id)
+     !$omp barrier
      !
-     CALL h_psi_ptr_old( npwx, npw, notcnv, psi(1,nb1), hpsi(1,nb1), i_batch ) ; nhpsi = nhpsi + notcnv
+     !CALL h_psi_ptr_old( npwx, npw, notcnv, psi(1,nb1), hpsi(1,nb1), i_batch ) ; nhpsi = nhpsi + notcnv
      !
-     
-     !!$acc kernels async(async_id)
-     !hpsi(:,:) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,i_batch) 
-     !psi(:,:) = psi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
-     !!$acc end kernels
-     
+
+IF ( .NOT. my_done ) THEN
      IF ( uspp ) CALL s_psi_ptr( npwx, npw, notcnv, psi(1,nb1), spsi(1,nb1), i_batch )
      !
      ! ... update the reduced hamiltonian
