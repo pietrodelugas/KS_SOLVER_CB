@@ -1,7 +1,7 @@
 program cb_davidson_main
 
 ! global variables
-   !use nvtx
+   use nvtx
    USE cb_module   ! It is important to observe that also dfft is defined in the module cb_module 
    use cegterg_mod ! We introduced the cegterg subroutines in the module cegterg_mod -> this is necessary to set the arrays for the batched 
                    ! kernel calls as allocatable inside the subroutines in order to manage their allocation/deallocation
@@ -14,9 +14,9 @@ program cb_davidson_main
                                    fftw_locker, cegterg_locker            
    use omp_lib,               only: omp_get_thread_num, omp_set_lock, omp_unset_lock, omp_init_lock
 #if defined(__CUDA)
-   use openacc,               only: acc_get_cuda_stream, c_devptr
+   use openacc,               only: acc_get_cuda_stream, c_devptr, acc_deviceptr
    use laxlib_cusolver_handles, ONLY : initialize_cusolver_handles, initialize_laxlib_cuda_stream, &
-                                       initialize_cublas_handles, finalize_cublas_handles
+                                       initialize_cublas_handles, finalize_cublas_handles, cublas_handle
    use fft_scalar_cuFFT !We can import the specific subroutine because it is defined as public in the .cuFFT module
                                                          !and in the interface fft_scalar
 #endif
@@ -55,7 +55,7 @@ program cb_davidson_main
    COMPLEX(DP), ALLOCATABLE :: psi_fft_comp(:,:,:), hpsi_fft_comp(:,:,:)
    INTEGER, ALLOCATABLE :: npw_comp(:)
    INTEGER, ALLOCATABLE :: nb1_comp(:)
-   INTEGER, ALLOCATABLE :: slot2batch(:)
+   INTEGER, ALLOCATABLE :: slot2batch(:) ! Variable declared to take into account, in the FFT inside the iter. part, the correct igk and ekin for each k
    INTEGER, ALLOCATABLE :: kdim_comp(:)
    INTEGER, ALLOCATABLE :: notcnv_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
    INTEGER, ALLOCATABLE :: my_n_comp(:) !Array declared for Zgemm batched kernel call inside iterative part
@@ -64,6 +64,8 @@ program cb_davidson_main
    INTEGER :: ind_p !Index_pointer for the cuFFT kernels
    TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
                                   ptr_hpsi_nb1(:), ptr_evc(:), ptr_psi_final(:), ptr_hpsi_final(:), ptr_spsi_final(:), ptr_vc_final(:)
+   TYPE(c_devptr), ALLOCATABLE :: ptr_psi_init(:), ptr_spsi_init(:), ptr_psi_nstart_init(:), ptr_hpsi_init(:), &
+                                  ptr_hc_init(:), ptr_sc_init(:)
 
 #if defined(__MPI)
 ! local paralelization variables
@@ -125,7 +127,8 @@ program cb_davidson_main
    overlap = use_overlap
    
    npwx_npol = npwx*npol
-   
+
+
    !3D FFT plans initialization:
 #if defined(__CUDA)
    dim_fft = dfft%nnr !We populate the module variable
@@ -177,20 +180,6 @@ program cb_davidson_main
    !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) !! We commented the line because we manage the 
                                                                                 !! allocation/deallocation inside the cegterg subroutine!
 
-   !!!! We initialize the igk_batches and the evc_batches before the loops created for the cegterg call so we can implement the batched cuFFT call
-   ! We can do this because nk_batches is an integer that is known because it is given in input
-   !do if1 = 1,nk_batches
-   !   do if2 = 1,nks
-   !        call init_k(if2, if1)
-   !   end do
-   !end do
-   !!$acc update device(igk_batched(:,1:nk_batches)) async(clock_thread)
-   !!!!!!!!
-
-   !do if3 = 1,nk_batches
-   !   call init_random_wfcs(npw_batched(if3), npwx, nbnd, evc_batched(1,1,if3),if3)
-   !end do
-   !!$acc update device(evc_batched(:,:,1:nk_batches)) async(clock_thread)
 
    do ik =1,nks, nk_batches
      ! actual number of k-points in this batch: may be less than nk_batches
@@ -214,7 +203,7 @@ program cb_davidson_main
      !
 
      call start_clock('davidson')
-     !CALL nvtxRangePush("Cegterg")
+     CALL nvtxRangePush("Cegterg")
      !$omp parallel num_threads(n_k) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
      !$omp do
      do i_batch = 1, n_k
@@ -248,14 +237,17 @@ program cb_davidson_main
                       hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
                       psi_comp, hpsi_comp, spsi_comp, hc_c_zgem, sc_c_zgem, vc_c_zgem, kdim_comp, notcnv_comp, &
                       ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                      ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch )
+                      ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, &
+                      ptr_psi_init, ptr_psi_nstart_init, ptr_spsi_init, ptr_hpsi_init, ptr_hc_init, ptr_sc_init, &
+                      !ptr_a_warmup, ptr_b_warmup, ptr_c_warmup, &
+                      psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
 #endif
      end do 
      !$omp end parallel 
-     !CALL nvtxRangePop()
+     CALL nvtxRangePop()
      call stop_clock('davidson') 
      ! !$omp barrier   !Remove
      !$acc wait  
@@ -296,6 +288,8 @@ program cb_davidson_main
    !$acc exit data delete(npw_comp)
    !$acc exit data delete(nb1_comp, slot2batch)
    !$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc)
+   !$acc exit data delete(ptr_psi_init, ptr_psi_nstart_init, ptr_spsi_init, ptr_hpsi_init, ptr_hc_init, ptr_sc_init)
+   !!$acc exit data delete(ptr_a_warmup, ptr_b_warmup, ptr_c_warmup)
    !!$acc exit data delete(ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, ptr_evc)
    deallocate( eig )
    deallocate( evc )
@@ -314,7 +308,10 @@ program cb_davidson_main
    deallocate( notcnv_comp )
    deallocate( my_n_comp )
    deallocate( ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result )
+   deallocate( ptr_psi_init, ptr_psi_nstart_init, ptr_hpsi_init, ptr_spsi_init, ptr_hc_init, ptr_sc_init )
+   !deallocate( ptr_a_warmup, ptr_b_warmup, ptr_c_warmup )
    !deallocate( ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, ptr_evc )
+   
    call finalize_cublas_handles()
 
    call print_clock('davidson')
@@ -325,6 +322,17 @@ program cb_davidson_main
    call print_clock( 'cegterg:update' )
    call print_clock( 'cegterg:overlap' )
    call print_clock( 'cegterg:last' )
+   
+   call print_clock( 'arrays of h pointer assignment')
+   call print_clock( 'arrays of s pointer assignment')
+   call print_clock( 'arrays of final pointer assignment')
+   call print_clock( 'Cholesky:')
+   call print_clock( '1st Ztrsm:')
+   call print_clock( '2nd Ztrsm:')
+   call print_clock( 'XsyevBatched:')
+   call print_clock( 'final Ztrsm:')
+   call print_clock( 'Zgemm strided init 1')
+   call print_clock( 'Zgemm strided init 2')
 
    call print_clock('h_psi')
    call print_clock('s_psi')

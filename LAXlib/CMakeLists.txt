@@ -11,7 +11,8 @@ set(src_lax
     transto.f90
     zhpev_drv.f90
     cdiaghg.f90
-    laxlib_cusolver_handle_mod.f90)
+    laxlib_cusolver_handle_mod.f90
+    module_interface_cusolverDnXsyevBatched.f90)
 qe_enable_cuda_fortran("${src_lax}")
 
 qe_add_library(qe_lax ${src_lax})
