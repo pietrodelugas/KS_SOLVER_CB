@@ -15,6 +15,7 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   integer :: ibnd_real_comp(nk_batches)
   integer :: ig, ibnd, ir, ik, nbnd_max, ibnd_real, n_active, ind_active_thr, init_ind ! ik is the index for the element in the batch
   integer :: n_active_comp(nk_batches)
+  integer :: npw_comp_max !! Added for performanc bottleneck
   !print *, "First my_h_psi_batched point : 1"
   
   nbnd_max = maxval(nbnd_comp)
@@ -22,6 +23,8 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   ibnd_real = 0
   ind_active_thr = 0
   init_ind = 0
+
+  npw_comp_max = maxval(npw_comp(1:nk_batches))
 
   !print *, "NPW_COMP ELEMENTS: ", npw_comp
   !print *, "NB1_COMP ELEMENTS: ", nb1_comp
@@ -56,18 +59,28 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
 
         n_active = 0
         
-        !$acc parallel loop async(clock_thread) private(init_ind)
-        do ik = 1, nk_batches
-            if (ibnd .le. nbnd_comp(ik)) then
+        !!$acc parallel loop async(clock_thread) private(init_ind)
+        !do ik = 1, nk_batches
+        !    if (ibnd .le. nbnd_comp(ik)) then
                !print *, "IK VALUE: ", ik
                !print *, "NB1 VALUE: ", nb1_comp(ik)
                !print *, "IBND_REAL CURRENT ik: ", ibnd_real_comp(ik)
                !print *, "NACTIVE CURRENT ik: ", n_active_comp(ik)
-               init_ind = slot2batch(ik) ! We take into account the true k index for the computing of the igk and ekin arrays 
-               do ig = 1, npw_comp(ik)
-                  fft_array_batched(dfft%nl(igk_batched(ig,init_ind)), n_active_comp(ik)) = psi(ig,ibnd_real_comp(ik),ik)
-               end do
-            end if
+        !       init_ind = slot2batch(ik) ! We take into account the true k index for the computing of the igk and ekin arrays 
+        !       do ig = 1, npw_comp(ik)
+        !          fft_array_batched(dfft%nl(igk_batched(ig,init_ind)), n_active_comp(ik)) = psi(ig,ibnd_real_comp(ik),ik)
+        !       end do
+        !    end if
+        !end do
+
+        !$acc parallel loop collapse(2) async(clock_thread) private(init_ind)
+        do ik = 1, nk_batches
+            do ig = 1, npwx
+                if (ig .le. npw_comp(ik) .and. ibnd .le. nbnd_comp(ik)) then
+                   init_ind = slot2batch(ik)
+                   fft_array_batched(dfft%nl(igk_batched(ig,init_ind)), n_active_comp(ik)) = psi(ig,ibnd_real_comp(ik),ik)
+                end if
+            end do
         end do
 
         !print *, "THREAD: ", clock_thread
@@ -90,17 +103,32 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
         !!We apply the same logics that were applied for the first do loop:
         n_active = 0 !We reset the counter of the active threads 
 
-        !$acc parallel loop async(clock_thread) private(init_ind)
+        !!$acc parallel loop gang async(clock_thread) private(init_ind)
+        !do ik = 1, nk_batches
+        !   if (ibnd .le. nbnd_comp(ik)) then
+        !      !$acc loop vector
+        !      do ig = 1, npw_comp(ik)
+        !         init_ind = slot2batch(ik)
+        !         hpsi(ig,ibnd_real_comp(ik),ik) = ekin_batched(ig,init_ind) * psi(ig,ibnd_real_comp(ik),ik) +  &
+        !                                          fft_array_batched(dfft%nl(igk_batched(ig,init_ind)), n_active_comp(ik))
+        !      end do
+        !   end if
+        !end do 
+        
+
+        !$acc parallel loop collapse(2) async(clock_thread) private(init_ind)
         do ik = 1, nk_batches
-           if (ibnd .le. nbnd_comp(ik)) then
-              do ig = 1, npw_comp(ik)
-                 init_ind = slot2batch(ik)
-                 hpsi(ig,ibnd_real_comp(ik),ik) = ekin_batched(ig,init_ind) * psi(ig,ibnd_real_comp(ik),ik) +  &
-                                                  fft_array_batched(dfft%nl(igk_batched(ig,init_ind)), n_active_comp(ik))
-              end do
-           end if
-        end do 
-  
+           do ig = 1, npwx
+               if (ig .le. npw_comp(ik) .and. ibnd .le. nbnd_comp(ik)) then
+                  init_ind = slot2batch(ik)
+                  hpsi(ig,ibnd_real_comp(ik),ik) = ekin_batched(ig,init_ind) * psi(ig,ibnd_real_comp(ik),ik) +  &
+                                                   fft_array_batched(dfft%nl(igk_batched(ig,init_ind)), n_active_comp(ik))
+               end if
+           end do
+        end do
+
+
+
   end do
   !$acc end data
 
