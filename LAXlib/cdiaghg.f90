@@ -513,10 +513,10 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   !! index of the root processor within a band group
   INTEGER,  INTENT(IN)  :: intra_bgrp_comm
   !! intra band group communicator
-  COMPLEX(DP), ALLOCATABLE :: h_sym_chk(:,:) !!M.Iovine - lines added for debugging
-  REAL(DP) :: max_asym !!M.Iovine - lines added for debugging
-  INTEGER :: ii_sym, jj_sym !!M.Iovine - lines added for debugging
-  INTEGER, ALLOCATABLE :: dinfo_host(:)!! Added for debugging
+  !COMPLEX(DP), ALLOCATABLE :: h_sym_chk(:,:) !!M.Iovine - lines added for debugging
+  !REAL(DP) :: max_asym !!M.Iovine - lines added for debugging
+  !INTEGER :: ii_sym, jj_sym !!M.Iovine - lines added for debugging
+  !INTEGER, ALLOCATABLE :: dinfo_host(:)!! Added for debugging
   !
 #if defined(__CUDA)
     ATTRIBUTES(DEVICE) :: h_d, s_d, e_d, v_d
@@ -524,13 +524,13 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   !
 !!!! DEBUGGING LINES!1
 #if defined(__CUDA)
-    COMPLEX(DP), ALLOCATABLE :: nan_chk(:,:)
-    LOGICAL, ALLOCATABLE :: nan_mask_r(:,:), nan_mask_i(:,:)
-    LOGICAL :: has_nan_dbg
-    REAL(DP), ALLOCATABLE :: nan_echk(:)
-    LOGICAL, ALLOCATABLE :: nan_emask(:)
-    LOGICAL, ALLOCATABLE :: inf_mask_r(:,:), inf_mask_i(:,:)
-    LOGICAL :: has_inf_dbg
+    !COMPLEX(DP), ALLOCATABLE :: nan_chk(:,:)
+    !LOGICAL, ALLOCATABLE :: nan_mask_r(:,:), nan_mask_i(:,:)
+    !LOGICAL :: has_nan_dbg
+    !REAL(DP), ALLOCATABLE :: nan_echk(:)
+    !LOGICAL, ALLOCATABLE :: nan_emask(:)
+    !LOGICAL, ALLOCATABLE :: inf_mask_r(:,:), inf_mask_i(:,:)
+    !LOGICAL :: has_inf_dbg
 #endif
   
   
@@ -553,7 +553,7 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   COMPLEX(DP), VARTYPE :: work_d(:)
   !!!! M.Iovine - We add a line to define the info array corresponding to the Batched routine of the Cusolver NVIDIA library:
   INTEGER, ALLOCATABLE :: d_info(:)
-  !!!! M.Iovine - We define host arrays of c_devpr pointers:
+  !!!! M.Iovine - We define host arrays of c_devpr pointers -> they are pointers defined on the host to memory space on the HOST :
   TYPE(c_devptr), ALLOCATABLE :: arr_of_ptr_s(:)
   TYPE(c_devptr), ALLOCATABLE :: arr_of_ptr_h(:)
   !!!! M.Iovine - We define device arrays of c_devpr pointers:
@@ -561,8 +561,8 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
   COMPLEX(DP) :: alpha=(1.D0, 0.D0) !! M.Iovine - we define the alpha coefficient for the triangular cublas linear solver 
   INTEGER :: b, ik,ind_min !! M.Iovine - indices for eigenvectors ordering 
   COMPLEX(DP) :: minim !! M.Iovine - min. value for padding
-  COMPLEX(DP) :: min_temp !! M.Iovine - temp variable for swapping of arrays for ordering eigenvalues and eigenvect
-  COMPLEX(DP), ALLOCATABLE :: s_orig_check(:,:) !! M.Iovine - added array to print overlap matrix for debugging!
+  !COMPLEX(DP) :: min_temp !! M.Iovine - temp variable for swapping of arrays for ordering eigenvalues and eigenvect
+  !COMPLEX(DP), ALLOCATABLE :: s_orig_check(:,:) !! M.Iovine - added array to print overlap matrix for debugging!
 
   ! various work space
   !
@@ -717,14 +717,13 @@ SUBROUTINE laxlib_cdiaghg_gpu_batched( n, m, h_d, s_d, ldh, e_d, v_d, n_k, me_bg
     
 
     !!!DEBUGG :
-    istat_cublas = cudaGetLastError()
-IF (istat_cublas /= 0) THEN
-   WRITE(ERROR_UNIT,*) 'STICKY CUDA ERROR before ZpotrfBatched: ', &
-             cudaGetErrorString(istat_cublas)
-END IF
+!    istat_cublas = cudaGetLastError()
+!IF (istat_cublas /= 0) THEN
+!   WRITE(ERROR_UNIT,*) 'STICKY CUDA ERROR before ZpotrfBatched: ', &
+!             cudaGetErrorString(istat_cublas)
+!END IF
     !!!!
 
-     
     cuSolverHandle = cusolver_handle(cusolver_thread) !!M.Iovine - this line must before any cuSolver routine kernel call!
     cublasnHandle = cublas_handle(cusolver_thread) !!M.Iovine - this line is introduced for cublas calls!
     
@@ -736,17 +735,14 @@ END IF
     !!!!
 
 
-CALL start_clock_gpu( 'Cholesky:' )
-
     info = cusolverDnZpotrfBatched(cuSolverHandle, CUBLAS_FILL_MODE_LOWER, n, arr_of_ptr_s_d, ldh, d_info(1), n_k)
     IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnZpotrfBatched',  ABS( info ) )
     !!!!
     
     !!!M.Iovine - Cholesky check:
-    info = cudaDeviceSynchronize()
+    !info = cudaDeviceSynchronize()
     !IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after Cholesky', ABS(info))
 
-CALL stop_clock_gpu( 'Cholesky:' )
  
     !IF (.NOT. ALLOCATED(dinfo_host)) ALLOCATE(dinfo_host(n_k))
     !dinfo_host = d_info(1:n_k)
@@ -770,6 +766,7 @@ CALL stop_clock_gpu( 'Cholesky:' )
 !!!!
 !CALL start_clock_gpu( 'arrays of h pointer assignment' )
     !! We assign to each element of arr_of_ptr the device pointer to each 2D slice in h_d :
+
     do k = 1, n_k
         arr_of_ptr_h(k) = c_devloc(h_d(:,:,k))
     end do
@@ -777,6 +774,9 @@ CALL stop_clock_gpu( 'Cholesky:' )
     !!! M.Iovine - we copy the c_devptr in the host array arr_of_ptr_h to the device array arr_of_ptr_h_d
     arr_of_ptr_h_d = arr_of_ptr_h
     
+    !info = cudaDeviceSynchronize()
+
+
     !Synchronization for timing given by Nsight check!
  !   info = cudaDeviceSynchronize()
 
@@ -791,7 +791,7 @@ CALL start_clock_gpu( '1st Zpotrf:' )
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-LEFT',  ABS( info ) )
 
-    info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
+    !info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
 
 CALL stop_clock_gpu( '1st Zpotrf:' )
 
@@ -852,17 +852,14 @@ IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang right', ABS(
       !IF ( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnXsyevjSetSortEig',  ABS( info ) )
       !!!!
 
-
       !! cusolverDnSyevBatched parameters and variables assignments:
       n_64 = int(n, kind=int64)
       n_k_64 = int(n_k, kind=int64)
       ldh_64 = int(ldh, kind=int64)
       info = cusolverDnCreateParams(syev_params)
-      print *, "Info: ", info
       info = cusolverDnSetAdvOptions(syev_params, CUSOLVERDN_GETRF, CUSOLVER_ALG_1)
-      print *, "Info: ", info
       !!
-      
+
       !! cusolverDnSyevBatched kernels:
       !! Remember that we are already into a use device OpenACC region
       info = cusolverDnXsyevBatched_bufferSize(cuSolverHandle, syev_params, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_UPPER, n_64, &
@@ -871,23 +868,6 @@ IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang right', ABS(
                                             device_workspace_bytes, &
                                             host_workspace_bytes, n_k_64)
       
-      !!! We allocate d_work after retrieved the Buffersize with the previousfunction:
-      !ALLOCATE(HostBuffer(host_workspace_bytes), STAT = info)
-      !IF( info /= 0 ) CALL lax_error__( ' cdiaghg_gpu_batched ', ' cannot allocate HostBuffer ', ABS( info ) )
-      !ALLOCATE(DeviceBuffer(device_workspace_bytes), STAT = info)
-      !IF( info /= 0 ) CALL lax_error__( ' cdiaghg_gpu_batched ', ' cannot allocate DeviceBuffer ', ABS( info ) )
-
-      !info = cusolverDnXsyevBatched(cuSolverHandle, syev_params, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_UPPER, &
-      !                           n_64, CUDA_C_64F, transfer(c_devloc(h_d), c_null_ptr), ldh_64, CUDA_R_64F, &
-      !                           transfer(c_devloc(e_d), c_null_ptr), CUDA_C_64F, &
-      !                           c_devloc(DeviceBuffer), device_workspace_bytes, c_loc(HostBuffer), host_workspace_bytes, c_loc(d_info), n_k_64)
-
-      !!
-
-      !!!! M.Iovine - We change the routine from the single kernel call to the batched routine of NVIDIA Cusolver:
-      !info = cusolverDnZheevjBatched_bufferSize(cuSolverHandle, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, &
-      !                                         n, h_d, ldh, e_d, lwork_d, syevj_params, n_k)
-      !IF( info /= CUSOLVER_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', ' cusolverDnZheevjBatched failed ', ABS( info ) )
       !
 #if ! defined(__USE_GLOBAL_BUFFER)
       ALLOCATE(HostBuffer(host_workspace_bytes), STAT = info)
@@ -957,16 +937,13 @@ IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang right', ABS(
 !!! LAST PART ADDED FOR DEBUGGING:
 !CALL start_clock_gpu( 'arrays of final pointer assignment' )
 
-    do k = 1, n_k
-        arr_of_ptr_h(k) = c_devloc(h_d(:,:,k))
-    end do
+    !do k = 1, n_k
+    !    arr_of_ptr_h(k) = c_devloc(h_d(:,:,k))
+    !end do
 
-    do k = 1, n_k
-        arr_of_ptr_s(k) = c_devloc(s_d(:,:,k))
-    end do
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !Synchronization for timing given by Nsight check!
-    !info = cudaDeviceSynchronize()
+    !do k = 1, n_k
+    !    arr_of_ptr_s(k) = c_devloc(s_d(:,:,k))
+    !end do
 
 !CALL stop_clock_gpu( 'arrays of final pointer assignment' )
 
@@ -980,8 +957,8 @@ CALL start_clock_gpu( 'final Ztrsm:' )
            n, n, alpha, arr_of_ptr_s_d, ldh, arr_of_ptr_h_d, ldh, n_k)
     IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasZtrsmBatched-eigenvectors',  ABS( info ) )
    
-   info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
-    IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang final', ABS(info))
+   !info = cudaDeviceSynchronize() !!M.Iovine - added a synchronize
+   ! IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang final', ABS(info))
 
 CALL stop_clock_gpu( 'final Ztrsm:' )
 
@@ -1183,10 +1160,10 @@ END DO
 !WRITE(ERROR_UNIT,*) '[E2] e_d has_nan =', ANY(nan_emask), ' first vals =', nan_echk(1:5)
 
 !!!! DEBUGGING LINES:  
-#if defined(__CUDA)
-        IF (ALLOCATED(nan_chk)) DEALLOCATE(nan_chk, nan_mask_r, nan_mask_i, inf_mask_r, inf_mask_i)
-        IF (ALLOCATED(nan_echk)) DEALLOCATE(nan_echk, nan_emask)
-#endif
+!#if defined(__CUDA)
+!        IF (ALLOCATED(nan_chk)) DEALLOCATE(nan_chk, nan_mask_r, nan_mask_i, inf_mask_r, inf_mask_i)
+!        IF (ALLOCATED(nan_echk)) DEALLOCATE(nan_echk, nan_emask)
+!#endif
   RETURN
   !
 END SUBROUTINE laxlib_cdiaghg_gpu_batched

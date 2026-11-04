@@ -23,15 +23,10 @@ MODULE cegterg_mod
   CONTAINS
 !----------------------------------------------------------------------------
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
-                    npw, npwx, nvec, nvecx, npol, evc, ethr, &
-                    e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
-                    n_k, hc_comp, sc_comp, vc_comp, ew_comp, evc_comp, done_comp, final_check_arr, &
-                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, &
-                    psi_comp, hpsi_comp, spsi_comp, hc_comp_zgem, sc_comp_zgem, vc_comp_zgem, kdim_comp, notcnv_comp, &
+                    npw, npwx, nvec, nvecx, npol, evc, ethr, e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
+                    n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, final_check_arr, &
+                    hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, kdim_comp, notcnv_comp, &
                     ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                    ptr_psi_final, ptr_hpsi_final, ptr_spsi_final, ptr_vc_final, & 
-                    ptr_psi_init, ptr_psi_nstart_init, ptr_spsi_init, ptr_hpsi_init, ptr_hc_init, ptr_sc_init, & 
-                    !ptr_a_warmup, ptr_b_warmup, ptr_c_warmup, &
                     psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch )
   !----------------------------------------------------------------------------
   !
@@ -56,7 +51,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
                               dev_memset_async !Fixed: import device memory management routines
   USE mytime,          ONLY : clock_thread, clock_cuda_stream, cegterg_locker !Fixed: import thread private varibale
   USE openacc,         ONLY : acc_get_cuda_stream, c_devptr, acc_deviceptr  !Fixed
-  USE, INTRINSIC :: ieee_arithmetic, ONLY: ieee_is_nan
+  USE laxlib_cusolver_handles, ONLY :  laxlib_cuda_stream,cusolver_thread, cublas_handle, cublas_initialized !!M.Iovine - added subroutines for cublas   
+  !USE, INTRINSIC :: ieee_arithmetic, ONLY: ieee_is_nan
 #if defined(_OPENMP) 
   USE omp_lib, only:  omp_set_lock, omp_unset_lock, omp_get_thread_num
 #endif
@@ -113,8 +109,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
     ! threads solving the other k-points of the current batch
   REAL(DP), INTENT(INOUT) :: ew_comp(nvec,n_k)
     ! shared, batch-wide reduced eigenvalues, one column per k-point
-  COMPLEX(DP), INTENT(INOUT) :: evc_comp(npwx*npol,nvec,n_k) !Introduced for the Zgemm batched calls agter the iterative part
-  COMPLEX(DP), INTENT(INOUT) :: psi_comp(npwx*npol,nvecx,n_k), spsi_comp(npwx*npol,nvecx,n_k), hpsi_comp(npwx*npol,nvecx,n_k)
   COMPLEX(DP), INTENT(INOUT), ALLOCATABLE :: hc_comp_itr(:,:,:), sc_comp_itr(:,:,:), vc_comp_itr(:,:,:)
     ! shared, batch-wide reduced Hamiltonian/overlap/eigenvector work arrays for iterative part
     ! slice (:,:,i_batch) belongs to this thread, the rest to the other
@@ -123,18 +117,12 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   LOGICAL, INTENT(INOUT) :: done_comp(n_k) ! Added standard array for checking convergence for every thread
   INTEGER, INTENT(INOUT) :: nbase_comp(n_k) ! Added shared array for nbase related to each thread
   LOGICAL, INTENT(INOUT) :: final_check_arr(n_k) !Added shared array for checking entering the final if statement 
-  COMPLEX(DP), INTENT(INOUT) :: hc_comp_zgem(nvecx,nvecx,n_k), sc_comp_zgem(nvecx,nvecx,n_k), vc_comp_zgem(nvecx,nvecx,n_k)
   INTEGER, INTENT(INOUT) :: kdim_comp(n_k) ! Added for the batched ZGemm kernel call
   INTEGER, INTENT(INOUT) :: notcnv_comp(n_k) ! Added for the batched Zgemm call inside the iterative part
   INTEGER, INTENT(INOUT) :: my_n_comp(n_k) ! Added for the batched Zgemm call inside the iterative part
   !We declare the following standard arrays of c-pointer(c_devptr) so that they will be array of pointers to matrices for the batched Zgemm:
   TYPE(c_devptr), INTENT(INOUT), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
-                                                ptr_hpsi_nb1(:), ptr_evc(:), ptr_vc_final(:), ptr_psi_final(:), ptr_hpsi_final(:), &
-                                                ptr_spsi_final(:)
-  !!Arrays of c pointers declaration for the zgemm call in the initial part before the iterations:
-  TYPE(c_devptr), INTENT(INOUT), ALLOCATABLE :: ptr_psi_init(:), ptr_hpsi_init(:), ptr_spsi_init(:), ptr_hc_init(:), ptr_sc_init(:), &
-                                                ptr_psi_nstart_init(:)
-  !TYPE(c_devptr), INTENT(INOUT), ALLOCATABLE :: ptr_a_warmup(:), ptr_b_warmup(:), ptr_c_warmup(:)
+                                                ptr_hpsi_nb1(:), ptr_evc(:)
   COMPLEX(DP), INTENT(INOUT) :: psi_fft_comp(npwx*npol, nvecx, n_k) !Shared array for the fft batched call in the initial part
   COMPLEX(DP), INTENT(INOUT) :: hpsi_fft_comp(npwx*npol, nvecx, n_k) !Shared array for the fft batched call in the initial part
   INTEGER, INTENT(INOUT) :: npw_comp(n_k) !Shared array for the fft batched call in the initial part
@@ -207,14 +195,12 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   INTEGER, SAVE :: prev_n_active_final_spsi = -1
   INTEGER :: n_active_zgem
   INTEGER :: n_active_final
-  !!Debugging variables:
-  INTEGER :: i_chk, j_chk, nan_hc, nan_sc
-  REAL(8) :: max_val_hc, max_val_sc
-  !COMPLEX(DP), ALLOCATABLE :: a_warmup(:,:), b_warmup(:,:), c_warmup(:,:)
+  !! Warm-up arrays:
+  COMPLEX(DP) :: a_warmup(4,4), b_warmup(4,4), c_warmup(4,4)
   !!!
 #if defined(__CUDA)
-  type(cublasHandle) :: myblasHandle(20) 
-  INTEGER :: istat_cublas
+  !type(cublasHandle) :: myblasHandle(20) 
+  !INTEGER :: istat_cublas
 #endif
 
   !
@@ -240,8 +226,16 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
 #if defined(__CUDA)
   ! Get cuda stream and link cublas to it
   mycudaStream = clock_cuda_stream
-  istat_cublas = cublasCreate(myblasHandle(i_batch))
-  istat_cublas = cublasSetStream(myblasHandle(i_batch), mycudaStream)
+  !istat_cublas = cublasCreate(myblasHandle(i_batch))
+  !istat_cublas = cublasSetStream(myblasHandle(i_batch), mycudaStream)
+  IF ( .NOT. cublas_initialized(i_batch) ) THEN
+            info = cublasCreate(cublas_handle(i_batch))
+            IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cublasCreate',  ABS( info ) )
+            cublas_initialized(i_batch) = .TRUE.
+            info = cublasSetStream(cublas_handle(i_batch), mycudaStream )
+            IF ( info /= CUBLAS_STATUS_SUCCESS ) CALL lax_error__( ' cdiaghg_gpu ', 'cusolverDnSetStream',  ABS( info ) )
+  ENDIF
+
 #endif
   !$acc data deviceptr(e) async(async_id) 
   !
@@ -305,6 +299,13 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   nbase  = nvec
   conv   = .FALSE.
   !
+  !
+  !! Warm-up call to cublas Zgemm:
+  !a_warmup = (1.D0,0.D0)
+  !b_warmup = (1.D0,0.D0)
+  !CALL ZGEMM( 'C','N', 4, 4, 4, ONE, a_warmup, 4, b_warmup, 4, ZERO, c_warmup, 4 )
+  !!!
+
   !$acc host_data use_device(evc, psi)
   CALL dev_memcpy_async(psi, evc, mycudaStream, (/ 1 , npwx*npol /), 1, &
                             (/ 1 , nvec /), 1)
@@ -314,6 +315,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !
   !print * , "DEBUGG POINT CEGTERG 1"
   
+  CALL start_clock( 'cegterg:h_psi_ptr init' ) 
+
   !$acc kernels async(async_id)
   psi_fft_comp(:,:,i_batch) = psi(1:(npwx*npol), 1:nvecx)
   hpsi_fft_comp(:,:,i_batch) = hpsi(1:(npwx*npol), 1:nvecx)
@@ -343,6 +346,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   
   !$acc wait(async_id)
   !$omp barrier
+  
+  CALL stop_clock( 'cegterg:h_psi_ptr init' )
 
   nhpsi = nhpsi + nvec
   !
@@ -351,12 +356,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   
   !write(6,*) 'BEFORE s_psi_ptr: shape(spsi)=', shape(spsi)
   !flush(6)
-
-  !write(6,*) 'BEFORE s_psi_ptr, hpsi: shape(hpsi)=', shape(hpsi)
-  !flush(6)
-
-  write(6,*) 'BEFORE s_psi_ptr, psi: shape(psi)=', shape(psi)
-  flush(6)
 
 
   IF ( uspp ) CALL s_psi_ptr( npwx, npw, nvec, psi, spsi, i_batch )
@@ -375,92 +374,54 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
 
   !We allocate the arrays of pointers for the initial part Zgemm calls:
   !$omp single
-  IF (.not. ALLOCATED(ptr_psi_init)) then
-     ALLOCATE(ptr_psi_init(n_k), ptr_psi_nstart_init(n_k), ptr_hpsi_init(n_k), ptr_spsi_init(n_k), ptr_hc_init(n_k), ptr_sc_init(n_k))
-     !$acc enter data create(ptr_psi_init, ptr_psi_nstart_init, ptr_hpsi_init, ptr_spsi_init, ptr_hc_init, ptr_sc_init)
+  IF (.not. ALLOCATED(ptr_psi) .or. prev_n_active_zgem /= n_k) then
+      ALLOCATE(ptr_psi(n_k), ptr_psi_result(n_k), ptr_hpsi(n_k), ptr_hpsi_nb1(n_k), ptr_spsi(n_k), ptr_hc(n_k), ptr_sc(n_k), ptr_vc(n_k))
+      !$acc enter data create(ptr_psi, ptr_psi_result, ptr_spsi, ptr_hpsi, ptr_hpsi_nb1, ptr_hc, ptr_sc, ptr_vc)
+      prev_n_active_zgem = n_k
+      prev_n_active_zgem_spsi = n_k
   END IF
   !$omp end single
 
   !We assign the 2D arrays to the arrays of pointers that are shared across the openMP threads:
-  ptr_hc_init(i_batch) = c_devloc(hc(1,n_start))
-  ptr_sc_init(i_batch) = c_devloc(sc(1,n_start))
-  ptr_psi_init(i_batch) = acc_deviceptr(psi(1,1))
-  ptr_psi_nstart_init(i_batch) = acc_deviceptr(psi(1,n_start))
-  ptr_hpsi_init(i_batch) = acc_deviceptr(hpsi(1,n_start))
-  ptr_spsi_init(i_batch) = acc_deviceptr(spsi(1,n_start))
-
+  ptr_hc(i_batch) = c_devloc(hc(1,n_start))
+  ptr_sc(i_batch) = c_devloc(sc(1,n_start))
+  ptr_psi(i_batch) = acc_deviceptr(psi(1,1))
+  ptr_psi_result(i_batch) = acc_deviceptr(psi(1,n_start))
+  ptr_hpsi(i_batch) = acc_deviceptr(hpsi(1,n_start))
+  ptr_spsi(i_batch) = acc_deviceptr(spsi(1,n_start))
 
   !write(6,*) 'ALLOC POINT cegterg POINT 6.1'
   !flush(6)
   
-  !!$acc kernels async(async_id)
-  !psi_comp(:,:,i_batch) = psi(1:(npwx*npol),1:nvecx)
-  !!$acc end kernels
-
-  !write(6,*) 'ALLOC POINT cegterg POINT 6.2'
-  !flush(6)
-  
-  !!$acc kernels async(async_id)
-  !hc_comp_zgem(:,:,i_batch) = hc(1:nvecx,1:nvecx)
-  !!$acc end kernels
-  
-  !!$acc wait(async_id)
-  !!$omp barrier
-
   kdim_comp(i_batch) = kdim
   !$omp barrier
 
   kdim_max = MAXVAL(kdim_comp(1:n_k)) 
   
-  !!$acc wait(async_id)
-  !!$omp barrier
-  
-  !write(6,*) 'kdim_max: ', kdim_max
-  !flush(6)
-
-  !DEBUGGING PRINT OF my_n and kdim:
-  !print *, "my_n value: ", my_n
-  !print *, "kdim value: ", kdim
-  !
-  
   CALL start_clock('First Zgemm call init')
 
   !$omp single
-  !$acc update device(ptr_psi_init, ptr_psi_nstart_init, ptr_spsi_init, ptr_hpsi_init, ptr_hc_init, ptr_sc_init)
+  !$acc update device(ptr_psi, ptr_hpsi, ptr_hc)
   if (n_start .le. n_end) THEN
   !
-  !!$acc host_data use_device(psi_comp,hpsi_comp,hc_comp_zgem)
-  !info = cublasZgemmStridedBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, psi_comp(1,1,1), &
-  !                                 kdmx, INT(size(psi_comp, 1)*size(psi_comp, 2),8), hpsi_comp(1,n_start,1), kdmx, &
-  !                                 INT(size(hpsi_comp, 1)*size(hpsi_comp, 2),8), ZERO, hc_comp_zgem(1,n_start,1), nvecx, &
-  !                                 INT(nvecx*nvecx,8), n_k)
-  !!$acc end host_data
-  
-  !$acc host_data use_device(ptr_psi_init, ptr_hpsi_init, ptr_hc_init)
-  info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
-                                         ptr_psi_init, kdmx, ptr_hpsi_init, kdmx, ZERO, ptr_hc_init, nvecx, n_k)
+  !$acc host_data use_device(ptr_psi, ptr_hpsi, ptr_hc)
+  info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
+                                          ptr_psi, kdmx, ptr_hpsi, kdmx, ZERO, ptr_hc, nvecx, n_k)
+
   !$acc end host_data
-
-
   !$acc wait(async_id)
+  
   END IF
   !$omp end single
   
-  write(6,*) 'ALLOC POINT cegterg POINT 8'
-  flush(6)
+  !write(6,*) 'ALLOC POINT cegterg POINT 8'
+  !flush(6)
 
-  ! We reset hc_comp that is needed for the Batched kernel call to diaghg before the iterative part:
-  !!$acc kernels async(async_id)
-  !hc(:,:) = hc_comp_zgem(1:nvecx,1:nvecx,i_batch)
-  !!$acc end kernels
-  !
-  
   !$acc wait(async_id)
   !$omp barrier
   
   CALL stop_clock('First Zgemm call init')
   
-
   !
   if (n_start .le. n_end) & 
 #if defined(__CUDA)
@@ -474,20 +435,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !write(6,*) 'ALLOC POINT cegterg POINT 9'
   !flush(6)
   
-  !write(6,*) 'shapes: spsi=', shape(spsi), ' spsi_comp dims=', size(spsi_comp,1), size(spsi_comp,2), size(spsi_comp,3), ' i_batch=', i_batch
-  !flush(6)
-
-  !!!!!! We proceed with the copy of spsi, psi, sc into the 3d array required for the batched Cublas GEMM kernel call
-  !IF ( uspp ) THEN
-  !   !$acc kernels async(async_id)
-  !   spsi_comp(:,:,i_batch) = spsi(1:(npwx*npol),1:nvec)
-  !   !$acc end kernels
-  !END IF
-
-  !!$acc kernels async(async_id)
-  !sc_comp_zgem(:,:,i_batch) = sc(1:nvecx,1:nvecx)
-  !!$acc end kernels
-  
   !$acc wait(async_id)
   
   !$omp barrier ! We add a barrier to be sure the OpenMP threads are synchronized
@@ -497,71 +444,31 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   IF ( uspp ) THEN
      !
      !$omp single
-     !$acc update device(ptr_psi_init, ptr_psi_nstart_init, ptr_spsi_init, ptr_hpsi_init, ptr_hc_init, ptr_sc_init)
+     !$acc update device(ptr_psi, ptr_spsi, ptr_sc)
      if (n_start .le. n_end) THEN
-     !!$omp single
-     !CALL ZGEMM( 'C','N', nbase, my_n, kdim, ONE, psi, kdmx, spsi(1,n_start), kdmx, &
-                 !ZERO, sc(1,n_start), nvecx )
-     !!$acc host_data use_device(psi_comp,spsi_comp,sc_comp_zgem)
-     !info = cublasZgemmStridedBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, psi_comp(1,1,1), &
-     !                                 kdmx, INT(npwx*npol*nvecx,8), spsi_comp(1,n_start,1), kdmx, INT(npwx*npol*nvecx,8), &
-     !                                 ZERO, sc_comp_zgem(1,n_start,1), nvecx, INT(nvecx*nvecx,8), n_k)
-     !!$acc end host_data
-     
-     !$acc host_data use_device(ptr_psi_init, ptr_spsi_init, ptr_sc_init)
-     info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
-                               ptr_psi_init, kdmx, ptr_spsi_init, kdmx, ZERO, ptr_sc_init, nvecx, n_k)
-     !$acc end host_data
+     !$acc host_data use_device(ptr_psi, ptr_spsi, ptr_sc)
+     info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
+                               ptr_psi, kdmx, ptr_spsi, kdmx, ZERO, ptr_sc, nvecx, n_k)
 
+     !$acc end host_data
      !$acc wait(async_id)
      
      END IF
      !$omp end single
-
-     !!$acc kernels async(async_id)
-     !sc(:,:) = sc_comp_zgem(1:nvecx,1:nvecx,i_batch)
-     !!$acc end kernels
 
   ELSE
      !
      !$omp single
-     !$acc update device(ptr_psi_init, ptr_psi_nstart_init, ptr_spsi_init, ptr_hpsi_init, ptr_hc_init, ptr_sc_init)
+     !$acc update device(ptr_psi, ptr_psi_result, ptr_sc)
      if (n_start .le. n_end) THEN
-     !!$acc host_data use_device(psi_comp,sc_comp_zgem)
-     !info = cublasZgemmStridedBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, psi_comp(1,1,1), &
-     !                                 kdmx, INT(size(psi_comp, 1)*size(psi_comp, 2),8), psi_comp(1,n_start,1), kdmx, &
-     !                                 INT(size(psi_comp, 1)*size(psi_comp, 2),8), ZERO, sc_comp_zgem(1,n_start,1), nvecx, INT(nvecx*nvecx,8), n_k)
-     !!$acc end host_data
-     
-     !$acc host_data use_device(ptr_psi_init, ptr_psi_nstart_init, ptr_sc_init)
-     info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
-                               ptr_psi_init, kdmx, ptr_psi_nstart_init, kdmx, ZERO, ptr_sc_init, nvecx, n_k)
+     !$acc host_data use_device(ptr_psi, ptr_psi_result, ptr_sc)
+     info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
+                               ptr_psi, kdmx, ptr_psi_result, kdmx, ZERO, ptr_sc, nvecx, n_k)
      !$acc end host_data
-
-
-     !write(6,*) 'Output value for Zgenn batched call: ', info
-     
-     ! DEBUGG LINES :
-     ! !$acc kernels async(async_id)
-     ! hc_debug(:,:) = hc_comp_zgem(:,:,i_batch)
-     ! sc_debug(:,:) = sc_comp_zgem(:,:,i_batch)
-     ! !$acc end kernels
- 
-      !do i = 1, 5
-       !  PRINT *, "hc: ", hc_debug(1,i)
-        ! PRINT *, "sc: ", sc_debug(1,i)
-      !end do
-
      !$acc wait(async_id)
+
      END IF
      !$omp end single
-     
-     !!$acc kernels async(async_id)
-     !sc(:,:) = sc_comp_zgem(1:nvecx,1:nvecx,i_batch)
-     !!$acc end kernels
-
-     !write(6,*) 'ALLOC POINT cegterg POINT 12'
-     !flush(6)
 
      !$acc wait(async_id)
      !$omp barrier
@@ -570,15 +477,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !
   
   CALL stop_clock('Second Zgemm call init')
-
-
-  !!$acc parallel loop collapse(2) async(async_id) present(psi, psi_comp)
-  !DO j = 1, nvecx
-  !    DO i = 1, npwx * npol
-  !       psi(i, j) = psi_comp(i, j, i_batch)
-  !    END DO
-  !END DO
-  !!$acc wait(async_id)
 
 
   !$acc host_data use_device(sc)
@@ -702,6 +600,12 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   nbase_comp(i_batch) = nvec  
   final_check_iter = .FALSE.
   final_check_arr(i_batch) = .FALSE.
+  
+  ! We initialize the prev_zgemm checking variables to avoid allocating other arrays:
+  !prev_n_active_zgem = n_k
+  !prev_n_active_zgem_spsi = n_k
+  !
+
   !$omp barrier
 
   iterate: DO kter = 1, maxter
@@ -756,15 +660,6 @@ END IF
      !! We insert the end if for the If statement and then we add the barrier and the stream sync before the Zgemm batched kernel call
      !$acc wait(async_id)
      !$omp barrier
-
-     !DEBUGGING PRINT OF my_n and kdim:
-     !print *, "my_n value: ", my_n
-     !print *, "kdim value: ", kdim
-     !print *, "n_start value: ", n_start
-     !print *, "nb1: ", nb1
-     !print *, "i_batch: ", i_batch
-     !print *, "notcnv: ", notcnv
-     !
      
      n_active_zgem = COUNT(.NOT. done_comp(1:n_k))
      notcnv_comp(i_batch) = notcnv
@@ -801,11 +696,11 @@ END IF
      END IF
      
      IF ( uspp ) THEN
-       IF(.NOT.(ALLOCATED(ptr_spsi))) THEN
-           ALLOCATE(ptr_spsi(n_active_zgem))
-           !$acc enter data create(ptr_spsi)
-           prev_n_active_zgem_spsi = n_active_zgem
-       ELSE
+       !IF(.NOT.(ALLOCATED(ptr_spsi))) THEN
+       !    ALLOCATE(ptr_spsi(n_active_zgem))
+       !    !$acc enter data create(ptr_spsi)
+       !    prev_n_active_zgem_spsi = n_active_zgem
+       !ELSE
            IF(prev_n_active_zgem_spsi /= n_active_zgem) THEN
               !$acc exit data delete(ptr_spsi)   
               DEALLOCATE(ptr_spsi)
@@ -814,7 +709,7 @@ END IF
               prev_n_active_zgem_spsi = n_active_zgem
            END IF
            !$acc wait(async_id)
-       END IF
+       !END IF
      END IF
      !$omp end single
 
@@ -845,15 +740,12 @@ END IF
         !$omp single
         !$acc update device(ptr_vc, ptr_psi, ptr_spsi, ptr_psi_result)
         if (n_start .le. n_end) THEN
-           !CALL ZGEMM( 'N','N', kdim, notcnv, my_n, ONE, spsi(1,n_start), kdmx, vc(n_start,1), nvecx, &
-           !        ZERO, psi(1,nb1), kdmx )
-           
            !$acc host_data use_device(ptr_psi_result, ptr_spsi, ptr_vc)
-           info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
-                                        ptr_spsi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
+           !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
+           !                             ptr_spsi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
+           info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
+                                     ptr_spsi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
            !$acc end host_data
-           
-           !print *, "Not strided cublas result info: ", info
 
         END IF
         !!$acc wait(async_id)
@@ -864,18 +756,12 @@ END IF
         !$omp single
         !$acc update device(ptr_vc, ptr_psi, ptr_psi_result)
         if (n_start .le. n_end) THEN
-           !CALL ZGEMM( 'N','N', kdim, notcnv, my_n, ONE, psi(1,n_start), kdmx, vc(n_start,1), nvecx, &
-           !         ZERO, psi(1,nb1), kdmx )
-
            !$acc host_data use_device(ptr_psi, ptr_psi_result, ptr_vc) 
-           info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
-                                          ptr_psi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
+           !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
+           !                               ptr_psi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
+           info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
+                                     ptr_psi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
            !$acc end host_data
-
-           !print *, "Info result for the Zgemm batched not Strided : ", info
-           
-           !write(6,*) 'ALLOC POINT cegterg POINT 14'
-           !flush(6)
 
         END IF
         !!$acc wait(async_id)
@@ -886,8 +772,8 @@ END IF
      !write(6,*) 'ALLOC POINT cegterg POINT 15'
      !flush(6)
 
-     !$acc wait(async_id)
-     !$omp barrier
+     !!$acc wait(async_id)
+     !!$omp barrier
 
 IF (.NOT. my_done) THEN
  
@@ -933,19 +819,16 @@ END IF
      !$omp single
      !$acc update device(ptr_hpsi, ptr_psi_result)
      if (n_start .le. n_end) THEN
-     !CALL ZGEMM( 'N','N', kdim, notcnv, my_n, ONE, hpsi(1,n_start), kdmx, vc(n_start,1), nvecx, &
-     !           ONE, psi(1,nb1), kdmx )
      !$acc host_data use_device(ptr_hpsi, ptr_vc, ptr_psi_result) 
-     info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
+     !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
+     !                                ptr_hpsi, kdmx, ptr_vc, nvecx, ONE, ptr_psi_result, kdmx, n_active_zgem)
+     info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
                                      ptr_hpsi, kdmx, ptr_vc, nvecx, ONE, ptr_psi_result, kdmx, n_active_zgem)
      !$acc end host_data
      END IF
      !$omp end single
      
 IF ( .NOT. my_done ) THEN
- 
-     !print *, "nb1 After Zgemm call 1 in iterative part", nb1
-     !print *, "Ibatch After Zgemm: ", i_batch
 
      !$acc host_data use_device(psi, hpsi, vc, ew)
      CALL mp_sum( psi(:,nb1:nbase+notcnv), inter_bgrp_comm )
@@ -958,9 +841,6 @@ IF ( .NOT. my_done ) THEN
      IF (npw < npwx) CALL dev_memset_async(psi, ZERO, mycudaStream, [npw+1,npwx], 1, [nb1, nbase+notcnv])
      IF (npol == 2)  CALL dev_memset_async(psi, ZERO, mycudaStream, [npwx+npw+1,2*npwx], 1, [nb1, nbase+notcnv])
      !
-     !write(6,*) 'ALLOC POINT cegterg POINT 20'
-     !flush(6)
-
      CALL stop_clock( 'cegterg:update' )
      !
      ! ... approximate inverse iteration
@@ -1029,9 +909,11 @@ IF ( .NOT. my_done ) THEN
      
 END IF
      
-     !$acc wait(async_id)
-     !$omp barrier
+     !!$acc wait(async_id)
+     !!$omp barrier
      
+     CALL start_clock( 'cegterg:h_psi_ptr iter' )
+
      n_active = COUNT(.NOT. done_comp(1:n_k))
      my_slot_fft = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
      
@@ -1056,7 +938,9 @@ END IF
 
      !$acc wait(async_id)
      !$omp barrier
- 
+     
+     CALL stop_clock( 'cegterg:h_psi_ptr iter' )
+
      !print * , "DEBUGG POINT CEGTERG 21.4"
      
      !nhpsi = nhpsi + notcnv
@@ -1075,9 +959,7 @@ END IF
      !$acc wait(async_id)
      !$omp barrier
      !
-     !CALL h_psi_ptr_old( npwx, npw, notcnv, psi(1,nb1), hpsi(1,nb1), i_batch ) ; nhpsi = nhpsi + notcnv
      !
-
 IF ( .NOT. my_done ) THEN
      IF ( uspp ) CALL s_psi_ptr( npwx, npw, notcnv, psi(1,nb1), spsi(1,nb1), i_batch )
      !
@@ -1106,36 +988,36 @@ END IF
      !! It is necessary to explicitly reassign the pointers to the corresponding matrices because the matrices dimensions
      !! and probably their memory location have changed, in particular n_start changed in the calls to divide_all and 
      !! mp_type_create_column_section :
-     IF ( .NOT. my_done ) THEN
-        IF ( .NOT. done_comp(i_batch) ) THEN
-           my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
-           ptr_hc(my_slot) = c_devloc(hc(nb1,n_start))
-           ptr_psi(my_slot) = acc_deviceptr(psi(1,n_start))
-           ptr_hpsi_nb1(my_slot) = acc_deviceptr(hpsi(1,nb1))
-        END IF
-     END IF
      
-     !$acc wait(async_id)
-     !$omp barrier
+     !!!!!WE COMMENT THE FOLLOWING LINES FOR PERFORMANCE:
+     !IF ( .NOT. my_done ) THEN
+     !   IF ( .NOT. done_comp(i_batch) ) THEN
+     !      my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
+     !      ptr_hc(my_slot) = c_devloc(hc(nb1,n_start))
+     !      ptr_psi(my_slot) = acc_deviceptr(psi(1,n_start))
+     !      ptr_hpsi_nb1(my_slot) = acc_deviceptr(hpsi(1,nb1))
+     !   END IF
+     !END IF
+     
+     !!$acc wait(async_id)
+     !!$omp barrier
 
      !write(6,*) 'ALLOC POINT cegterg POINT 22'
      !flush(6)
-     
-     !print *, "nb1 Before Zgemm call 2 in iterative part", nb1
-     !print *, "Ibatch Before Zgemm: ", i_batch
-     
-     !print *,"notcnv max in 2nd Zgemm call:", notcnv_max
-     !print *,"my_n max in 2nd Zgemm call:", my_n_max
 
+     !!!!!!!!!
+     
      !$omp single
      !$acc update device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
      !$acc host_data use_device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
-     info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                                    ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx, n_active_zgem)
-     !print *, "info zgemm 2nd call: ", info
+     !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
+     !                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx, n_active_zgem)
+     info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
+                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx, n_active_zgem)
      !$acc end host_data
      !$omp end single
-     !$acc wait(async_id)
+     
+     !!$acc wait(async_id) !!COMMENTED TO IMPROVE PERFORMANCES
 
 IF( .NOT. my_done ) THEN
 
@@ -1174,10 +1056,11 @@ END IF
         !$omp single
         !$acc update device(ptr_spsi, ptr_psi, ptr_sc)
         !$acc host_data use_device(ptr_spsi, ptr_psi, ptr_sc)
-        !CALL ZGEMM( 'C','N', notcnv, my_n, kdim, ONE, spsi(1,nb1), kdmx, psi(1,n_start), kdmx, &
-        !            ZERO, sc(nb1,n_start), nvecx )
-        info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                                    ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+        !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
+        !                            ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+        info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
+                                  ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+
         !$acc end host_data
         !$omp end single
         !$acc wait(async_id)
@@ -1187,13 +1070,15 @@ END IF
         !$omp single
         !$acc update device(ptr_psi_result, ptr_psi, ptr_sc)
         !$acc host_data use_device(ptr_psi_result, ptr_psi, ptr_sc)
-        !CALL ZGEMM( 'C','N', notcnv, my_n, kdim, ONE, psi(1,nb1), kdmx, psi(1,n_start), kdmx, &
-        !            ZERO, sc(nb1,n_start), nvecx )
-        info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
+        !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
+        !                            ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+        info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
                                     ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+ 
         !$acc end host_data
         !$omp end single
-        !$acc wait(async_id) 
+      
+        !!$acc wait(async_id) !!COMMENTED TO IMPROVE PERFORMANCES
         !
      END IF
 
@@ -1238,9 +1123,6 @@ IF ( .NOT. my_done ) THEN
      !
      ! ... diagonalize the reduced hamiltonian
      !
-     !write(6,*) 'ALLOC POINT cegterg POINT 24'
-     !flush(6)
-
      ! The if checks if for the current thread the convergence has been reached
      ! The current nbase is stored only if the convergence has not been reached
      IF ( .NOT. done_comp(i_batch) ) THEN
@@ -1257,9 +1139,6 @@ END IF
      !write(6,*) 'ALLOC POINT cegterg POINT 25'
      !flush(6)
 
-     !write(*,*) 'CHECK1 i_batch=', i_batch, ' kter=', kter, ' done_comp=', done_comp(1:n_k), &
-      !     ' nbase_comp=', nbase_comp(1:n_k), ' n_active=', n_active, ' nbase_max=', nbase_max
-     
      CALL nvtxRangePush("Cdiaghg call 2")
      n_active = COUNT(.NOT. done_comp(1:n_k))
 
@@ -1270,17 +1149,10 @@ END IF
           nbase_max = MAXVAL(nbase_comp(1:n_k), MASK=.NOT. done_comp(1:n_k))
      END IF
      
-     !write(6,*) 'ALLOC POINT cegterg POINT 27'
-     !flush(6)
-
      !$acc wait(async_id)
      !$omp barrier
      !$omp single
-      !    write(*,*) 'SINGLE i_batch=', i_batch, ' nbase_max=', nbase_max, ' n_active=', n_active, &
-       !    ' prev_nbase_max=', prev_nbase_max, ' prev_n_active=', prev_n_active, &
-        !   ' ALLOCATED=', ALLOCATED(hc_comp_itr)
 
-         !!$acc wait
          IF( .NOT. ALLOCATED(hc_comp_itr) ) THEN
              ALLOCATE( hc_comp_itr(nbase_max,nbase_max,n_active), sc_comp_itr(nbase_max,nbase_max,n_active), &
                        vc_comp_itr(nbase_max,nbase_max,n_active), ew_comp_itr(nbase_max,n_active) )
@@ -1289,23 +1161,20 @@ END IF
              prev_n_active  = n_active
          ELSE
              IF ( (prev_nbase_max .ne. nbase_max) .OR. (prev_n_active .ne. n_active) ) THEN
-                !$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
-                DEALLOCATE( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
-                ALLOCATE( hc_comp_itr(nbase_max,nbase_max,n_active), sc_comp_itr(nbase_max,nbase_max,n_active), &
-                          vc_comp_itr(nbase_max,nbase_max,n_active), ew_comp_itr(nbase_max,n_active) )
-               !$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
-               prev_nbase_max = nbase_max
-               prev_n_active  = n_active
+                 !$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+                 DEALLOCATE( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
+                 ALLOCATE( hc_comp_itr(nbase_max,nbase_max,n_active), sc_comp_itr(nbase_max,nbase_max,n_active), &
+                           vc_comp_itr(nbase_max,nbase_max,n_active), ew_comp_itr(nbase_max,n_active) )
+                 !$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
+                 prev_nbase_max = nbase_max
+                 prev_n_active  = n_active
              END IF
          END IF
  
       !$omp end single
       !$acc wait
-      !$omp barrier
+      !!$omp barrier
       
-      !write(6,*) 'ALLOC POINT cegterg POINT 27'
-      !flush(6)
-
       !!PADDING LOGICS :
 IF ( .NOT. my_done ) THEN
       IF ( .NOT. done_comp(i_batch) ) THEN
@@ -1328,7 +1197,7 @@ IF ( .NOT. my_done ) THEN
                 sc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
                 !$acc end kernels
              END DO
-             !$acc wait(async_id)
+             !!$acc wait(async_id)
      
              DO i = nbase+1 , nbase_max
                 !$acc kernels async(async_id)
@@ -1342,7 +1211,7 @@ IF ( .NOT. my_done ) THEN
       END IF
       !$omp barrier !! It is needed to add a barrier inside the IF because a barrier only after the IF statement branching doesn't prevent
                     !! the OMP threads to go further in the code instructions during the execution
-      !write(*,*) 'PADDING DONE i_batch=', i_batch
+
 END IF
      !! END PADDING LOGICS !
      
@@ -1354,7 +1223,6 @@ END IF
      CALL start_clock( 'cegterg:diag' )
      IF( my_bgrp_id == root_bgrp_id ) THEN
         !$omp single
-      !  write(*,*) 'ENTERING SINGLE, all threads must have passed prior barrier'
         IF(n_active .GT. 0) THEN
         !$acc host_data use_device(hc_comp_itr, sc_comp_itr, ew_comp_itr, vc_comp_itr)
         CALL diaghg( nbase_max, nvec, hc_comp_itr, sc_comp_itr, nbase_max, ew_comp_itr, vc_comp_itr, &
@@ -1398,10 +1266,6 @@ END IF
        END IF 
      END DO 
      !
-
-     !write(6,*) 'ALLOC POINT cegterg POINT 30'
-     !flush(6)
-
      ! ... next line useful for band parallelization of exact exchange
      IF ( nbgrp > 1 ) CALL mp_bcast(conv,root_bgrp_id,inter_bgrp_comm)
      !
@@ -1433,10 +1297,6 @@ END IF
         CALL mp_sum( evc, inter_bgrp_comm )
         !$acc end host_data
         !
-        !write(6,*) 'ALLOC POINT cegterg POINT 38'
-        !flush(6)
-        !print *, "Current batch ", i_batch
-
         IF ( notcnv == 0 ) THEN
            !
            ! ... all roots converged: return
@@ -1460,9 +1320,6 @@ END IF
            !
         END IF
         !
-        !write(6,*) 'ALLOC POINT cegterg POINT 39'
-        !flush(6)
-
         ! Added update of done_vomp shared array among threads and barrier and if statement:
         done_comp(i_batch) = my_done
         !$omp barrier 
@@ -1473,10 +1330,6 @@ END IF
         !
         ! ... refresh psi, H*psi and S*psi
         !
-        !write(6,*) 'ALLOC POINT cegterg POINT 40'
-        !flush(6)
-        !print *, "Current batch ", i_batch
-
         !$acc host_data use_device(evc, psi, hpsi, spsi, vc)
         CALL dev_memcpy_async(psi, evc, mycudaStream, (/ 1, npwx*npol /), 1, &
                                       (/ 1, nvec /), 1)
@@ -1492,25 +1345,13 @@ END IF
            !
         END IF
         !
-        !write(6,*) 'ALLOC POINT cegterg POINT 41'
-        !flush(6)
-        !print *, "Current batch ", i_batch
-
         CALL ZGEMM( 'N','N', kdim, nvec, my_n, ONE, hpsi(1,n_start), kdmx, vc(n_start,1), nvecx, &
                     ZERO, psi(1,nvec+1), kdmx )
         
-        !write(6,*) 'ALLOC POINT cegterg POINT 42'
-        !flush(6)
-        !print *, "Current batch ", i_batch
-
         CALL dev_memcpy_async(hpsi, psi(:,nvec+1:), mycudaStream,&
                                         (/1, npwx*npol/), 1, &
                                         (/1, nvec/), 1)
         CALL mp_sum( hpsi(:,1:nvec), inter_bgrp_comm )
-
-        !write(6,*) 'ALLOC POINT cegterg POINT 43'
-        !flush(6)
-        !print *, "Current batch ", i_batch
 
         !$acc end host_data
         !
@@ -1523,11 +1364,6 @@ END IF
         !sc(1:nbase,1:nbase) = ZERO
         !vc(1:nbase,1:nbase) = ZERO
         !
-        
-        !write(6,*) 'ALLOC POINT cegterg POINT 44'
-        !flush(6)
-
-
         !$acc kernels  async(async_id) 
         DO n = 1, nbase
            hc(n,n) = CMPLX( e(n), 0.0_DP ,kind=DP)
@@ -1547,19 +1383,11 @@ END IF
         !
         CALL stop_clock( 'cegterg:last' )
         !
-        !write(6,*) 'ALLOC POINT cegterg POINT 45'
-        !flush(6)
-
      END IF
      !
   END DO iterate
   !
   !$acc exit data delete(ew) async(async_id) 
-  
-  !IF ( ALLOCATED(hc_comp_itr) ) THEN
-  !!$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
-  !DEALLOCATE( hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr )
-  !END IF
 
   DEALLOCATE( recv_counts )
   DEALLOCATE( displs )
@@ -1582,7 +1410,7 @@ END IF
   !$acc end data 
   ! Cleanup (Fixed)
 #if defined(__CUDA)
-  istat_cublas = cublasDestroy(myblasHandle(i_batch))  
+  !istat_cublas = cublasDestroy(myblasHandle(i_batch))  
 #endif
   !
   CALL stop_clock( 'cegterg' ); !write(*,*) 'stop cegterg' ; FLUSH(6)
