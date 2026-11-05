@@ -592,7 +592,7 @@ USE omp_lib, only: omp_set_lock, omp_unset_lock, omp_lock_kind
 
        !   no table exist for these parameters
        !   initialize a new one
-       print *, "I'M INSIDE THE IF CHECKING THe IP"
+       !print *, "I'M INSIDE THE IF CHECKING THe IP"
        CALL init_plan()
        
      END IF
@@ -775,7 +775,9 @@ SUBROUTINE cfft3d_gpu_batched( f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, s
      !CALL lookup() ! We run this check during the initialization of Plans in the main program
      
      ip = ind_p_arr(howmany) !We retrieve the index pointer corresponding to the nk_batches
-     
+     !print * , "HOWMANY value before setting stream, FIRST: ", howmany
+     !print * , "IP value before setting stream, FIRST: ", ip
+
      IF( ip == -1 ) THEN
 
        !   no table exist for these parameters
@@ -959,12 +961,12 @@ SUBROUTINE init_plan_cfft3d_gpu(nx, ny, nz, ldx, ldy, ldz, howmany, ip) !We set 
            call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu ", " cufftDestroy failed ", istat)
        ENDIF
 
-       print *, "HowMany VALUE!!!!!! : ", howmany
+       !print *, "HowMany VALUE!!!!!! : ", howmany
        istat = cufftPlanMany( cufft_plan_3d( icurrent), RANK, FFT_DIM, &
                               DATA_DIM, STRIDE, DIST, &
                               DATA_DIM, STRIDE, DIST, &
                               CUFFT_Z2Z, BATCH)
-       print *, "INIT DEBUG: batch =", howmany, "slot =", icurrent, "handle =", cufft_plan_3d(icurrent), "status =", istat
+       !print *, "INIT DEBUG: batch =", howmany, "slot =", icurrent, "handle =", cufft_plan_3d(icurrent), "status =", istat
 
        call fftx_error__(" fft_scalar_cuFFT: cfft3d_gpu_batched ", " cufftPlanMany failed ", istat)
 
@@ -978,7 +980,7 @@ SUBROUTINE init_plan_cfft3d_gpu(nx, ny, nz, ldx, ldy, ldz, howmany, ip) !We set 
        dims(4,icurrent) = howmany
        ip = icurrent
        icurrent = MOD( icurrent, ndims ) + 1
-       print *, "Icurrent value: ", icurrent 
+       !print *, "Icurrent value: ", icurrent 
        RETURN
 
       CONTAINS
