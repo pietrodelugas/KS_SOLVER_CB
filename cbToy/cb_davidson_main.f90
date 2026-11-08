@@ -180,13 +180,13 @@ program cb_davidson_main
         clock_thread = i_batch
         current_k = ik + i_batch - 1
         call init_k(current_k,i_batch)
-        !$acc update device(igk_batched(:,i_batch)) async(clock_thread)
+        !!$acc update device(igk_batched(:,i_batch)) async(clock_thread)
         call init_random_wfcs(npw_batched(i_batch), npwx, nbnd, evc_batched(1,1,i_batch),i_batch)
-        !$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
+        !!$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
      end do
      !
-     !!$acc update device(igk_batched)
-     !!$acc update device(evc_batched)
+     !$acc update device(igk_batched)
+     !$acc update device(evc_batched)
 
      call start_clock('davidson')
      
