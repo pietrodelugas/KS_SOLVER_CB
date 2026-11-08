@@ -185,6 +185,8 @@ program cb_davidson_main
         !$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
      end do
      !
+     !!$acc update device(igk_batched)
+     !!$acc update device(evc_batched)
 
      call start_clock('davidson')
      
