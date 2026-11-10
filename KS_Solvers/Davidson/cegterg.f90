@@ -151,6 +151,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
     ! the eigenvectors of the Hamiltonian
   !DEBUGG HOST ARRAYS:
   COMPLEX(DP) :: hc_debug(nvecx,nvecx), sc_debug(nvecx,nvecx)
+  INTEGER :: nvecx_pad ! nvecx + nvec: padding so that batched Zgemm calls sized on the max over batches stay in bounds
   !
   REAL(DP), ALLOCATABLE :: ew(:)
   !!$acc declare device_resident(ew)
@@ -262,25 +263,34 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   numblock  = (npw+blocksize-1)/blocksize
 #endif
   !
-  ALLOCATE(  psi( npwx*npol, nvecx ), STAT=ierr )
+  nvecx_pad = nvecx + nvec
+  ALLOCATE(  psi( npwx*npol, nvecx_pad ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate psi ', ABS(ierr) )
-  ALLOCATE( hpsi( npwx*npol, nvecx ), STAT=ierr )
+  ALLOCATE( hpsi( npwx*npol, nvecx_pad ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate hpsi ', ABS(ierr) )
   !$acc enter data async(async_id) create(psi, hpsi)
+  ! zero the (padded) work space: the batched Zgemm calls also read the padding columns
+  !$acc kernels async(async_id) present(psi, hpsi)
+  psi = ZERO
+  hpsi = ZERO
+  !$acc end kernels
   !
   IF ( uspp ) THEN
-     ALLOCATE( spsi( npwx*npol, nvecx ), STAT=ierr )
+     ALLOCATE( spsi( npwx*npol, nvecx_pad ), STAT=ierr )
      IF( ierr /= 0 ) &
         CALL errore( ' cegterg ',' cannot allocate spsi ', ABS(ierr) )
      !$acc enter data async(async_id) create(spsi)
+     !$acc kernels async(async_id) present(spsi)
+     spsi = ZERO
+     !$acc end kernels
   END IF
   !
-  ALLOCATE( sc( nvecx, nvecx ), STAT=ierr )
+  ALLOCATE( sc( nvecx_pad, nvecx_pad ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate sc ', ABS(ierr) )
-  ALLOCATE( hc( nvecx, nvecx ), STAT=ierr )
+  ALLOCATE( hc( nvecx_pad, nvecx_pad ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate hc ', ABS(ierr) )
   ALLOCATE( vc( nvecx, nvecx ), STAT=ierr )
@@ -338,8 +348,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !print * , "DEBUGG POINT CEGTERG 3"
 
   !$acc kernels async(async_id)
-  hpsi(:,:) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
-  psi(:,:) = psi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
+  hpsi(:,1:nvecx) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
+  psi(:,1:nvecx) = psi_fft_comp(1:(npwx*npol),1:nvecx,i_batch)
   !$acc end kernels
 
   !print * , "DEBUGG POINT CEGTERG4"
@@ -367,7 +377,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !
   !$acc host_data use_device(evc, psi, hpsi, spsi, hc, sc)
   CALL divide_all(inter_bgrp_comm,nbase,n_start,n_end,recv_counts,displs)
-  CALL mp_type_create_column_section(sc(1,1), 0, nbase, nvecx, column_section_type)
+  CALL mp_type_create_column_section(sc(1,1), 0, nbase, nvecx_pad, column_section_type)
   my_n = n_end - n_start + 1; !write (*,*) nbase,n_start,n_end
   !$acc end host_data 
   !
@@ -406,7 +416,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !
   !$acc host_data use_device(ptr_psi, ptr_hpsi, ptr_hc)
   info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
-                                          ptr_psi, kdmx, ptr_hpsi, kdmx, ZERO, ptr_hc, nvecx, n_k)
+                                          ptr_psi, kdmx, ptr_hpsi, kdmx, ZERO, ptr_hc, nvecx_pad, n_k)
 
   !$acc end host_data
   !$acc wait(async_id)
@@ -448,7 +458,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
      if (n_start .le. n_end) THEN
      !$acc host_data use_device(ptr_psi, ptr_spsi, ptr_sc)
      info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
-                               ptr_psi, kdmx, ptr_spsi, kdmx, ZERO, ptr_sc, nvecx, n_k)
+                               ptr_psi, kdmx, ptr_spsi, kdmx, ZERO, ptr_sc, nvecx_pad, n_k)
 
      !$acc end host_data
      !$acc wait(async_id)
@@ -463,7 +473,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
      if (n_start .le. n_end) THEN
      !$acc host_data use_device(ptr_psi, ptr_psi_result, ptr_sc)
      info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nbase, my_n, kdim_max, ONE, &
-                               ptr_psi, kdmx, ptr_psi_result, kdmx, ZERO, ptr_sc, nvecx, n_k)
+                               ptr_psi, kdmx, ptr_psi_result, kdmx, ZERO, ptr_sc, nvecx_pad, n_k)
      !$acc end host_data
      !$acc wait(async_id)
 
@@ -950,8 +960,8 @@ IF ( .NOT. my_done ) THEN
      nhpsi = nhpsi + notcnv
 
      !$acc kernels async(async_id)
-     hpsi(:,:) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,my_slot_fft)
-     psi(:,:) = psi_fft_comp(1:(npwx*npol),1:nvecx,my_slot_fft)
+     hpsi(:,1:nvecx) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,my_slot_fft)
+     psi(:,1:nvecx) = psi_fft_comp(1:(npwx*npol),1:nvecx,my_slot_fft)
      !$acc end kernels
 END IF 
      !print * , "DEBUGG POINT CEGTERG 21.5"
@@ -969,7 +979,7 @@ IF ( .NOT. my_done ) THEN
      !
      !$acc host_data use_device(psi, hpsi, spsi, hc, sc)
      CALL divide_all(inter_bgrp_comm,nbase+notcnv,n_start,n_end,recv_counts,displs)
-     CALL mp_type_create_column_section(sc(1,1), nbase, notcnv, nvecx, column_section_type)
+     CALL mp_type_create_column_section(sc(1,1), nbase, notcnv, nvecx_pad, column_section_type)
      my_n = n_end - n_start + 1; !write (*,*) nbase+notcnv,n_start,n_end
      !$acc end host_data
      !
@@ -1011,9 +1021,9 @@ END IF
      !$acc update device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
      !$acc host_data use_device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
      !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-     !                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx, n_active_zgem)
+     !                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx_pad, n_active_zgem)
      info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx, n_active_zgem)
+                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx_pad, n_active_zgem)
      !$acc end host_data
      !$omp end single
      
@@ -1057,9 +1067,9 @@ END IF
         !$acc update device(ptr_spsi, ptr_psi, ptr_sc)
         !$acc host_data use_device(ptr_spsi, ptr_psi, ptr_sc)
         !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-        !                            ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+        !                            ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
         info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                                  ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+                                  ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
 
         !$acc end host_data
         !$omp end single
@@ -1071,9 +1081,9 @@ END IF
         !$acc update device(ptr_psi_result, ptr_psi, ptr_sc)
         !$acc host_data use_device(ptr_psi_result, ptr_psi, ptr_sc)
         !info = cublasZgemmBatched(myblasHandle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-        !                            ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+        !                            ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
         info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                                    ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx, n_active_zgem)
+                                    ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
  
         !$acc end host_data
         !$omp end single
