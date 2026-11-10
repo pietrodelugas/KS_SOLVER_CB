@@ -684,6 +684,18 @@ END IF
 
      !print *,"my_n_max: ", my_n_max
      !print *, "notcnv_max: ", notcnv_max
+     !
+     ! ... The batched Zgemm below contracts over my_n_max (the maximum over the active
+     ! ... batches), but this batch only has my_n valid basis vectors (e.g. right after a
+     ! ... restart, when another batch still has a larger basis). The contribution of the
+     ! ... extra rows of vc must vanish: zero them (the stale values there are not zero).
+     IF ( .NOT. my_done ) THEN
+        IF ( my_n_max > my_n .AND. n_end+1 <= n_start+my_n_max-1 ) THEN
+           !$acc kernels async(async_id) present(vc)
+           vc(n_end+1:n_start+my_n_max-1, 1:notcnv_max) = ZERO
+           !$acc end kernels
+        END IF
+     END IF
      
      !$acc wait(async_id)
      !$omp barrier
