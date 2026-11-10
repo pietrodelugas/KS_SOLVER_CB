@@ -151,6 +151,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
     ! the eigenvectors of the Hamiltonian
   !DEBUGG HOST ARRAYS:
   COMPLEX(DP) :: hc_debug(nvecx,nvecx), sc_debug(nvecx,nvecx)
+  LOGICAL :: restart_now
   INTEGER :: nvecx_pad ! nvecx + nvec: padding so that batched Zgemm calls sized on the max over batches stay in bounds
   !
   REAL(DP), ALLOCATABLE :: ew(:)
@@ -1237,8 +1238,9 @@ IF ( .NOT. my_done ) THEN
           END IF   
           ! Padding logic END
       END IF
-      !$omp barrier !! It is needed to add a barrier inside the IF because a barrier only after the IF statement branching doesn't prevent
-                    !! the OMP threads to go further in the code instructions during the execution
+      ! NOTE: a barrier must NOT be placed here: this block is skipped by the threads whose batch is already
+      ! converged (my_done), and a barrier reached by only some threads of the team misaligns all the following
+      ! barriers. The unconditional barrier after the END IF below provides the synchronization.
 
 END IF
      !! END PADDING LOGICS !
@@ -1310,8 +1312,9 @@ END IF
      ! ... eigenvectors;  set the basis dimension to nvec.
      !
 
-     IF ( notcnv == 0 .OR. &
-          nbase+notcnv > nvecx .OR. dav_iter == maxter ) THEN
+     restart_now = ( notcnv == 0 .OR. nbase+notcnv > nvecx .OR. dav_iter == maxter )
+     !
+     IF ( restart_now ) THEN
         !
         CALL start_clock( 'cegterg:last' )
         !
@@ -1348,13 +1351,20 @@ END IF
            !
         END IF
         !
-        ! Added update of done_vomp shared array among threads and barrier and if statement:
-        done_comp(i_batch) = my_done
-        !$omp barrier 
-        IF( ALL(done_comp(1:n_k)) .OR. dav_iter == maxter) THEN
-           CALL stop_clock( 'cegterg:last' )
-           EXIT iterate
-        END IF
+     END IF ! restart_now (first part)
+     !
+     ! Update of the done_comp shared array among threads, barrier and exit test.
+     ! These MUST be executed by every thread at every iteration (not only by the
+     ! threads whose own batch is restarting), otherwise the barriers of the
+     ! different threads get out of step.
+     done_comp(i_batch) = my_done
+     !$omp barrier
+     IF( ALL(done_comp(1:n_k)) .OR. dav_iter == maxter) THEN
+        IF ( restart_now ) CALL stop_clock( 'cegterg:last' )
+        EXIT iterate
+     END IF
+     !
+     IF ( restart_now ) THEN
         !
         ! ... refresh psi, H*psi and S*psi
         !
