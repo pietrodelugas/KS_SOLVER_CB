@@ -152,6 +152,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !DEBUGG HOST ARRAYS:
   COMPLEX(DP) :: hc_debug(nvecx,nvecx), sc_debug(nvecx,nvecx)
   LOGICAL :: restart_now
+  INTEGER :: notcnv_slot(n_k), n_slot
   INTEGER :: nvecx_pad ! nvecx + nvec: padding so that batched Zgemm calls sized on the max over batches stay in bounds
   !
   REAL(DP), ALLOCATABLE :: ew(:)
@@ -948,7 +949,6 @@ END IF
      psi_fft_comp(:,:,my_slot_fft) = psi(1:(npwx*npol), 1:nvecx)
      hpsi_fft_comp(:,:,my_slot_fft) = hpsi(1:(npwx*npol), 1:nvecx)
      npw_comp(my_slot_fft) = npw
-     notcnv_comp(my_slot_fft) = notcnv
      nb1_comp(my_slot_fft) = nb1
      slot2batch(my_slot_fft)  = i_batch
      !$acc end kernels
@@ -958,7 +958,17 @@ END IF
      !$omp barrier
      
      !$omp single
-     CALL h_psi_ptr_iter(npwx, npw_comp, nvecx, notcnv_comp, nb1_comp, psi_fft_comp, hpsi_fft_comp, i_batch, n_active, slot2batch)
+     ! notcnv_comp is indexed by batch on the host, while h_psi_ptr_iter works with
+     ! slots (the active batches, packed): build the slot-indexed copy explicitly.
+     ! (it is a plain host array: the routine copies it to the device by itself)
+     n_slot = 0
+     DO n = 1, n_k
+        IF ( .NOT. done_comp(n) ) THEN
+           n_slot = n_slot + 1
+           notcnv_slot(n_slot) = notcnv_comp(n)
+        END IF
+     END DO
+     CALL h_psi_ptr_iter(npwx, npw_comp, nvecx, notcnv_slot, nb1_comp, psi_fft_comp, hpsi_fft_comp, i_batch, n_active, slot2batch)
      !!$acc wait
      !$omp end single
 
