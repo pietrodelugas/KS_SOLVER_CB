@@ -1,4 +1,4 @@
- &system crystal_name='Si', ecutwfc = 14.d0, ethr=1.d-6, ncell=2, david=9 , nk_batches=2/
+ &system crystal_name='Si', ecutwfc = 14.d0, ethr=1.d-6, ncell=2, david=2 , nk_batches=4/
 11
 0.0 0.0 0.0
 0.0 0.0 0.1
