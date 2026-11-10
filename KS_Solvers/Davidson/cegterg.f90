@@ -387,6 +387,39 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !We allocate the arrays of pointers for the initial part Zgemm calls:
   !$omp single
   IF (.not. ALLOCATED(ptr_psi) .or. prev_n_active_zgem /= n_k) then
+      ! free the arrays left over from a previous call, possibly sized for fewer active batches
+      IF (ALLOCATED(ptr_psi)) THEN
+         !$acc exit data delete(ptr_psi)
+         DEALLOCATE(ptr_psi)
+      END IF
+      IF (ALLOCATED(ptr_psi_result)) THEN
+         !$acc exit data delete(ptr_psi_result)
+         DEALLOCATE(ptr_psi_result)
+      END IF
+      IF (ALLOCATED(ptr_spsi)) THEN
+         !$acc exit data delete(ptr_spsi)
+         DEALLOCATE(ptr_spsi)
+      END IF
+      IF (ALLOCATED(ptr_hpsi)) THEN
+         !$acc exit data delete(ptr_hpsi)
+         DEALLOCATE(ptr_hpsi)
+      END IF
+      IF (ALLOCATED(ptr_hpsi_nb1)) THEN
+         !$acc exit data delete(ptr_hpsi_nb1)
+         DEALLOCATE(ptr_hpsi_nb1)
+      END IF
+      IF (ALLOCATED(ptr_hc)) THEN
+         !$acc exit data delete(ptr_hc)
+         DEALLOCATE(ptr_hc)
+      END IF
+      IF (ALLOCATED(ptr_sc)) THEN
+         !$acc exit data delete(ptr_sc)
+         DEALLOCATE(ptr_sc)
+      END IF
+      IF (ALLOCATED(ptr_vc)) THEN
+         !$acc exit data delete(ptr_vc)
+         DEALLOCATE(ptr_vc)
+      END IF
       ALLOCATE(ptr_psi(n_k), ptr_psi_result(n_k), ptr_hpsi(n_k), ptr_hpsi_nb1(n_k), ptr_spsi(n_k), ptr_hc(n_k), ptr_sc(n_k), ptr_vc(n_k))
       !$acc enter data create(ptr_psi, ptr_psi_result, ptr_spsi, ptr_hpsi, ptr_hpsi_nb1, ptr_hc, ptr_sc, ptr_vc)
       prev_n_active_zgem = n_k
