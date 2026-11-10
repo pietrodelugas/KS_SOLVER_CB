@@ -35,6 +35,7 @@ program test_fwinv_gpu
     CALL mpi_data_init(mp%me, mp%n, mp%root, mp%comm)
     !
     CALL test%init()
+    CALL init_clocks(.false.)  ! needed by the UtilXlib clocks called from FFTXlib
     !
     ! A rather large threshold is necessary to match the results of all
     ! possible implementations.
@@ -767,20 +768,3 @@ program test_fwinv_gpu
   END SUBROUTINE test_invfft_many_gpu_1
   
 end program test_fwinv_gpu
-!
-! Dummy
-SUBROUTINE stop_clock(label)
-CHARACTER(*) :: label
-END SUBROUTINE stop_clock
-!
-SUBROUTINE start_clock(label)
-CHARACTER(*) :: label
-END SUBROUTINE start_clock
-!
-SUBROUTINE stop_clock_gpu(label)
-CHARACTER(*) :: label
-END SUBROUTINE stop_clock_gpu
-!
-SUBROUTINE start_clock_gpu(label)
-CHARACTER(*) :: label
-END SUBROUTINE start_clock_gpu

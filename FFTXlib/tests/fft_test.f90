@@ -274,6 +274,7 @@ program test
     END IF
   end do
   if (ecutrho == 0.d0) ecutrho = 4.0d0*ecutwfc
+  CALL init_clocks(.false.)  ! UtilXlib clocks are called from FFTXlib
 
 #if defined(__MPI)
 
@@ -689,7 +690,7 @@ program test
 
   end if
   ! now print FFT clocks
-  call print_clock(mype, npes, ncount)
+  call fft_test_print_clock(mype, npes, ncount)
 
   CALL fft_type_deallocate(dffts)
   CALL fft_type_deallocate(dfftp)
@@ -1114,7 +1115,7 @@ end subroutine recips
   END SUBROUTINE fft_base_info
 end program test
 
-subroutine start_clock(label)
+subroutine fft_test_start_clock(label)
   use timers
   use fft_param
   implicit none
@@ -1168,7 +1169,7 @@ subroutine start_clock(label)
   end select
 end subroutine
 
-subroutine stop_clock(label)
+subroutine fft_test_stop_clock(label)
   use timers
   use fft_param
   implicit none
@@ -1222,7 +1223,7 @@ subroutine stop_clock(label)
   end select
 end subroutine
 !
-subroutine print_clock(mype, npes, ncount)
+subroutine fft_test_print_clock(mype, npes, ncount)
   use timers
   use fft_param
   implicit none
@@ -1296,16 +1297,16 @@ subroutine print_clock(mype, npes, ncount)
 
 end subroutine
 
-subroutine start_clock_gpu(label)
+subroutine fft_test_start_clock_gpu(label)
   implicit none
   character(len=*) :: label
-  call start_clock(label)
+  call fft_test_start_clock(label)
 end subroutine
 
-subroutine stop_clock_gpu(label)
+subroutine fft_test_stop_clock_gpu(label)
   implicit none
   character(len=*) :: label
-  call stop_clock(label)
+  call fft_test_stop_clock(label)
 end subroutine
 !
 ! Copyright (C) 2001 PWSCF group
