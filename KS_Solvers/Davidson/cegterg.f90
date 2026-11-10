@@ -759,6 +759,7 @@ END IF
 
         END IF
         !!$acc wait(async_id)
+        !$acc wait(async_id) ! GEMM stream must complete before the other threads use the result
         !$omp end single
         !     
      ELSE
@@ -775,6 +776,7 @@ END IF
 
         END IF
         !!$acc wait(async_id)
+        !$acc wait(async_id) ! GEMM stream must complete before the other threads use the result
         !$omp end single
         !
      END IF
@@ -836,6 +838,7 @@ END IF
                                      ptr_hpsi, kdmx, ptr_vc, nvecx, ONE, ptr_psi_result, kdmx, n_active_zgem)
      !$acc end host_data
      END IF
+        !$acc wait(async_id) ! GEMM stream must complete before the other threads use the result
      !$omp end single
      
 IF ( .NOT. my_done ) THEN
@@ -1025,6 +1028,7 @@ END IF
      info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
                                ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx_pad, n_active_zgem)
      !$acc end host_data
+        !$acc wait(async_id) ! GEMM stream must complete before the other threads use the result
      !$omp end single
      
      !!$acc wait(async_id) !!COMMENTED TO IMPROVE PERFORMANCES
@@ -1072,6 +1076,7 @@ END IF
                                   ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
 
         !$acc end host_data
+        !$acc wait(async_id) ! GEMM stream must complete before the other threads use the result
         !$omp end single
         !$acc wait(async_id)
         !     
@@ -1086,6 +1091,7 @@ END IF
                                     ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
  
         !$acc end host_data
+        !$acc wait(async_id) ! GEMM stream must complete before the other threads use the result
         !$omp end single
       
         !!$acc wait(async_id) !!COMMENTED TO IMPROVE PERFORMANCES
