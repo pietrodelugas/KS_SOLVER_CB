@@ -569,10 +569,7 @@ SUBROUTINE fwfft_y_gpu_batched( fft_kind, f_d, dfft, howmany, stream )
   !!   On output, f is overwritten
   !!
   USE cudafor
-  USE fft_scalar,    ONLY: cfft3d_gpu, cfft3ds_gpu
-  USE fft_parallel,  ONLY: tg_cft3s_gpu, many_cft3s_gpu
-  USE fft_parallel_2d,  ONLY: tg_cft3s_2d_gpu => tg_cft3s_gpu, &
-                              & many_cft3s_2d_gpu => many_cft3s_gpu
+  USE fft_scalar,    ONLY: cfft3d_gpu_batched, cfft3ds_gpu_batched
   USE fft_types,     ONLY: fft_type_descriptor
   USE fft_param,     ONLY: DP
   USE mytime,        ONLY: clock_cuda_stream
@@ -613,54 +610,17 @@ SUBROUTINE fwfft_y_gpu_batched( fft_kind, f_d, dfft, howmany, stream )
 
   CALL start_clock_gpu(clock_label)
 
-  IF( dfft%lpara .and. dfft%use_pencil_decomposition ) THEN
+  IF( dfft%lpara ) THEN
 
-     !IF( howmany_ /= 1 .and. fft_kind /= 'Wave' ) THEN
-     !   CALL fftx_error__( ' fwfft ', ' howmany not yet implemented for parallel driver ', 1 )
-     !END IF
-     IF( stream_ /= clock_cuda_stream ) THEN
-        CALL fftx_error__( ' fwfft ', ' stream support not implemented for parallel driver ', 1 )
-     END IF
-
-     IF( fft_kind == 'Rho' ) THEN
-        IF( howmany_ == 1 ) THEN
-           CALL tg_cft3s_gpu(f_d,dfft,-1)
-        ELSE
-           CALL many_cft3s_gpu(f_d,dfft,-1, howmany_)
-        END IF
-     ELSE IF( fft_kind == 'Wave' ) THEN
-        IF( howmany_ == 1 ) THEN
-           CALL tg_cft3s_gpu(f_d,dfft,-2)
-        ELSE
-           CALL many_cft3s_gpu(f_d,dfft,-2, howmany_)
-        END IF
-     ELSE IF( fft_kind == 'tgWave' ) THEN
-        CALL tg_cft3s_gpu( f_d, dfft, -3 )
-     END IF
-
-  ELSE IF( dfft%lpara ) THEN
-
-     IF( howmany_ /= 1 ) THEN
-        IF( fft_kind == 'Rho' ) THEN
-           CALL many_cft3s_2d_gpu( f_d, dfft, -1, howmany_)
-        ELSE IF( fft_kind == 'Wave' ) THEN
-           CALL many_cft3s_2d_gpu( f_d, dfft, -2, howmany_ )
-        END IF
-     ELSE
-        IF( fft_kind == 'Rho' ) THEN
-           CALL tg_cft3s_2d_gpu( f_d, dfft, -1 )
-        ELSE IF( fft_kind == 'Wave' ) THEN
-           CALL tg_cft3s_2d_gpu( f_d, dfft, -2 )
-        END IF
-     END IF
+     CALL fftx_error__( 'fwfft_y_gpu_batched', 'batched FFT not implemented for parallel (MPI) FFT driver', 1 )
 
   ELSE
 
      IF( fft_kind == 'Rho' ) THEN
-        CALL cfft3d_gpu( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
+        CALL cfft3d_gpu_batched( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
                         dfft%nr1x,dfft%nr2x,dfft%nr3x, howmany_ , -1, stream_ )
      ELSE
-        CALL cfft3ds_gpu( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
+        CALL cfft3ds_gpu_batched( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
                          dfft%nr1x,dfft%nr2x,dfft%nr3x, howmany_ , -1, &
                          dfft%isind, dfft%iplw, stream_ )
      END IF
@@ -693,11 +653,8 @@ SUBROUTINE invfft_y_gpu_batched( fft_kind, f_d, dfft, howmany, stream )
   !!   No check is performed on the correspondence between dfft and fft_kind. 
   !!   from all other cases
   USE cudafor
-  USE fft_scalar,    ONLY: cfft3d_gpu, cfft3ds_gpu
+  USE fft_scalar,    ONLY: cfft3d_gpu_batched, cfft3ds_gpu_batched
   USE fft_smallbox,  ONLY: cft_b, cft_b_omp
-  USE fft_parallel,  ONLY: tg_cft3s_gpu, many_cft3s_gpu
-  USE fft_parallel_2d,  ONLY: tg_cft3s_2d_gpu => tg_cft3s_gpu, &
-                            & many_cft3s_2d_gpu => many_cft3s_gpu
   USE fft_types,     ONLY: fft_type_descriptor
   USE fft_param,     ONLY: DP
   USE mytime,        ONLY: clock_cuda_stream
@@ -737,54 +694,17 @@ SUBROUTINE invfft_y_gpu_batched( fft_kind, f_d, dfft, howmany, stream )
 
   CALL start_clock_gpu(clock_label)
 
-  IF( dfft%lpara .and. dfft%use_pencil_decomposition ) THEN
+  IF( dfft%lpara ) THEN
 
-     !IF( howmany_ /= 1 .and. fft_kind /= 'Wave' ) THEN
-     !   CALL fftx_error__( ' invfft ', ' howmany not yet implemented for parallel driver ', 1 )
-     !END IF
-     IF( stream_ /= clock_cuda_stream ) THEN
-        CALL fftx_error__( ' invfft ', ' stream support not implemented for parallel driver ', 1 )
-     END IF
-     
-     IF( fft_kind == 'Rho' ) THEN
-        IF( howmany_ == 1 ) THEN
-           CALL tg_cft3s_gpu( f_d, dfft, 1 )
-        ELSE
-            CALL many_cft3s_gpu( f_d, dfft, 1, howmany_ )
-        END IF
-     ELSE IF( fft_kind == 'Wave' ) THEN
-        IF( howmany_ == 1 ) THEN
-            CALL tg_cft3s_gpu( f_d, dfft, 2 )
-        ELSE
-            CALL many_cft3s_gpu( f_d, dfft, 2, howmany_ )
-        END IF
-     ELSE IF( fft_kind == 'tgWave' ) THEN
-        CALL tg_cft3s_gpu( f_d, dfft, 3 )
-     END IF
-
-  ELSE IF( dfft%lpara ) THEN
-
-     IF( howmany_ /= 1 ) THEN
-        IF( fft_kind == 'Rho' ) THEN
-           CALL many_cft3s_2d_gpu( f_d, dfft, 1,  howmany_)
-        ELSE IF( fft_kind == 'Wave' ) THEN
-           CALL many_cft3s_2d_gpu( f_d, dfft, 2, howmany_ )
-        END IF
-     ELSE
-        IF( fft_kind == 'Rho' ) THEN
-           CALL tg_cft3s_2d_gpu( f_d, dfft, 1 )
-        ELSE IF( fft_kind == 'Wave' ) THEN
-           CALL tg_cft3s_2d_gpu( f_d, dfft, 2 )
-        END IF
-     END IF
+     CALL fftx_error__( 'invfft_y_gpu_batched', 'batched FFT not implemented for parallel (MPI) FFT driver', 1 )
 
   ELSE
 
      IF( fft_kind == 'Rho' ) THEN
-        CALL cfft3d_gpu( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
+        CALL cfft3d_gpu_batched( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
                         dfft%nr1x, dfft%nr2x, dfft%nr3x, howmany_ , 1, stream_)
      ELSE 
-        CALL cfft3ds_gpu( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
+        CALL cfft3ds_gpu_batched( f_d, dfft%nr1, dfft%nr2, dfft%nr3, &
                         dfft%nr1x,dfft%nr2x,dfft%nr3x, howmany_ , 1, &
                         dfft%isind, dfft%iplw, stream_ )
      END IF
