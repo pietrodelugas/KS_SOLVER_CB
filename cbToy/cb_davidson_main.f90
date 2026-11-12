@@ -182,6 +182,7 @@ program cb_davidson_main
    allocate( npw_comp(nk_batches), nb1_comp(nk_batches), slot2batch(nk_batches) )
    allocate( ptr_hpsi(nk_batches), ptr_hpsi_nb1(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
+   !$acc enter data copyin(btype)   ! shared by all the threads: it must not be transferred by one of them while the others use it
    !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
    !$acc enter data create(psi_fft_comp, hpsi_fft_comp)
    !$acc enter data create(npw_comp)
