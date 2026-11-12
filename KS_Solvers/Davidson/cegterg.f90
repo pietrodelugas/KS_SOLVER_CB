@@ -1252,34 +1252,27 @@ IF ( .NOT. my_done ) THEN
       IF ( .NOT. done_comp(i_batch) ) THEN
           my_slot = 1 + COUNT(.NOT. done_comp(1:i_batch-1))
        
-          ! For each thread hc_comp_itr and sc_comp_itr are assigned based on sc and hc up to the nbase-th element :
-          !$acc kernels async(async_id)
-          hc_comp_itr(1:nbase,1:nbase,my_slot) = hc(1:nbase,1:nbase)
-          sc_comp_itr(1:nbase,1:nbase,my_slot) = sc(1:nbase,1:nbase)
-          !$acc end kernels
-          !!$acc wait(async_id) !!!!!!!!!!!!!!!!!!!!!!ATTENTION!!!!!!!!!!!!!!
-     
-          ! Padding logic START :
-          IF (nbase < nbase_max) THEN
-             DO i = nbase+1 , nbase_max
-                !$acc kernels async(async_id)
-                hc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-                hc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-                sc_comp_itr(:,i,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-                sc_comp_itr(i,:,my_slot) = CMPLX(0.D0,0.D0,kind=DP)
-                !$acc end kernels
+          ! hc_comp_itr / sc_comp_itr of this slot, nbase_max x nbase_max, in one kernel:
+          !  - the nbase x nbase block is copied from hc / sc
+          !  - the padding (rows and columns beyond nbase) is zero, except for the diagonal,
+          !    where sc = 1 and hc = i*1e3 so that the padded eigenpairs are decoupled and sorted last
+          !$acc parallel loop collapse(2) async(async_id)
+          DO j = 1, nbase_max
+             DO i = 1, nbase_max
+                IF ( i <= nbase .AND. j <= nbase ) THEN
+                   hc_comp_itr(i,j,my_slot) = hc(i,j)
+                   sc_comp_itr(i,j,my_slot) = sc(i,j)
+                ELSE IF ( i == j ) THEN
+                   hc_comp_itr(i,j,my_slot) = CMPLX( REAL(i,DP)*1.D3, 0.D0, kind=DP )
+                   sc_comp_itr(i,j,my_slot) = CMPLX( 1.D0, 0.D0, kind=DP )
+                ELSE
+                   hc_comp_itr(i,j,my_slot) = CMPLX( 0.D0, 0.D0, kind=DP )
+                   sc_comp_itr(i,j,my_slot) = CMPLX( 0.D0, 0.D0, kind=DP )
+                END IF
              END DO
-             !!$acc wait(async_id)
-     
-             DO i = nbase+1 , nbase_max
-                !$acc kernels async(async_id)
-                sc_comp_itr(i,i,my_slot) = CMPLX(1.D0,0.D0,kind=DP)
-                hc_comp_itr(i,i,my_slot) = CMPLX(i*1e3,0.D0,kind=DP)
-                !$acc end kernels
-             END DO
-             !$acc wait(async_id)
-          END IF   
-          ! Padding logic END
+          END DO
+          ! always wait: the diagonalization below (one thread, after the barrier) reads the slices of all threads
+          !$acc wait(async_id)
       END IF
       ! NOTE: a barrier must NOT be placed here: this block is skipped by the threads whose batch is already
       ! converged (my_done), and a barrier reached by only some threads of the team misaligns all the following
