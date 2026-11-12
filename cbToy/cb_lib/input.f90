@@ -19,11 +19,11 @@
   integer :: icar
 
   !>  system namelist
-  NAMELIST / system / crystal_name, ncell, nbnd, ecutwfc, david, ethr, energy_shift, use_overlap, nk_batches, band_chunk
+  NAMELIST / system / crystal_name, ncell, nbnd, ecutwfc, david, ethr, energy_shift, use_overlap, nk_batches, fft_cols_max
 
   !>  default values for the system namelist
   crystal_name = 'Si' ; ncell = 1 ; nbnd  = 0 ; ecutwfc = 4.d0 ; david=4 ; ethr=1.d-6; energy_shift=.true.
-  use_overlap = .false.; nk_batches=2; band_chunk = 0
+  use_overlap = .false.; nk_batches=2; fft_cols_max = 0
 
 ! read the 'crystal' type (Si, Ge, GaAs, ...)
 ! read the linear dimension of the crystal supercell 
@@ -47,7 +47,7 @@
   call mp_bcast ( energy_shift, root, world_comm )
   call mp_bcast ( use_overlap,  root, world_comm )
   call mp_bcast ( nk_batches ,  root, world_comm )
-  call mp_bcast ( band_chunk ,  root, world_comm )
+  call mp_bcast ( fft_cols_max ,  root, world_comm )
 #endif
 
   do icrystal =1, ncrystal
@@ -56,7 +56,7 @@
   if (icrystal>ncrystal) stop ' wrong crystal name'
   if (ncell <= 0) stop ' ncell must be positive'
   if (nbnd < 0) stop ' nbnd must be positive'
-  if (band_chunk < 0) stop ' band_chunk must be non-negative'
+  if (fft_cols_max < 0) stop ' fft_cols_max must be non-negative'
   if (nbnd == 0) nbnd = 8 * ncell**3
   allocate (btype(nbnd)) ; btype = 1   ! btype=0; btype(1:min(4*ncell**3,nbnd)) = 1
   if (david < 2) stop ' david must be at least 2'

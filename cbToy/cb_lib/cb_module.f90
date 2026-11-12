@@ -14,8 +14,8 @@ module cb_module
 
  integer, parameter :: ncrystal = 15 
  integer            :: nk_batches 
- integer            :: band_chunk = 0     ! bands per batched FFT call in H*psi (input; 0 = automatic from a memory budget)
- integer            :: band_chunk_eff = 1 ! effective value: power of two, 1 <= band_chunk_eff <= nbnd
+ integer            :: fft_cols_max = 0   ! max. columns (bands x k-points) of one batched FFT block in H*psi (input; 0 = automatic)
+ integer            :: fft_cols_eff = 1   ! effective value: power of two, 1 <= fft_cols_eff <= nbnd*nk_batches
  character(len=4) :: crystal(ncrystal)
  real(DP) :: cb_alat(ncrystal)
  real(DP) :: vs3(ncrystal), vs8(ncrystal),vs11(ncrystal)

@@ -60,7 +60,7 @@ program cb_davidson_main
    INTEGER :: npwx_npol
    INTEGER :: if1, if2, if3 !! Indices declared to manage the do loops for the initialization of igk_batched and evc_batched
    INTEGER :: ind_p !Index_pointer for the cuFFT kernels
-   INTEGER :: i_b   ! bands per batched FFT call (loop variable for the plan initialization)
+   INTEGER :: i_b   ! columns per batched FFT call (loop variable for the plan initialization)
    TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
                                   ptr_hpsi_nb1(:), ptr_evc(:)
 
@@ -127,41 +127,43 @@ program cb_davidson_main
    npwx_npol = npwx*npol
 
 
-   !! Bands per batched FFT call in H*psi: a power of two, either given in the input (band_chunk)
-   !! or the largest one that keeps the FFT work array below a memory budget (1 GiB).
-   if (band_chunk > 0) then
-      band_chunk_eff = min(band_chunk, nbnd)
+   !! Columns (band x k-point pairs) of one batched FFT block in H*psi: a power of two, either given in the input
+   !! (fft_cols_max) or the largest one that keeps the FFT work array below a memory budget (1 GiB).
+   if (fft_cols_max > 0) then
+      fft_cols_eff = min(fft_cols_max, nbnd*nk_batches)
    else
-      band_chunk_eff = nbnd
-      do while ( band_chunk_eff > 1 .and. &
-                 16_8*dfft%nnr*nk_batches*band_chunk_eff > 2_8**30 )
-         band_chunk_eff = band_chunk_eff / 2
+      fft_cols_eff = nbnd*nk_batches
+      do while ( fft_cols_eff > 1 .and. 16_8*dfft%nnr*fft_cols_eff > 2_8**30 )
+         fft_cols_eff = fft_cols_eff / 2
       end do
    end if
    i_f = 1                                   ! round down to a power of two
-   do while ( 2*i_f <= band_chunk_eff )
+   do while ( 2*i_f <= fft_cols_eff )
       i_f = 2*i_f
    end do
-   band_chunk_eff = i_f
-   print *, 'band_chunk (bands per batched FFT call) = ', band_chunk_eff
+   fft_cols_eff = i_f
+   print *, 'fft_cols (columns per batched FFT block) = ', fft_cols_eff
 
    !!3D FFT plans initialization:
-   !! one plan for every howmany = (power of two <= band_chunk_eff) * (number of active batches)
+   !! one plan for every power of two <= fft_cols_eff (the H*psi blocks are split in power-of-two pieces),
+   !! plus 1..nk_batches (first H*psi, whose group of k-points may be partial)
 #if defined(__CUDA)
    dim_fft = dfft%nnr !We populate the module variables
    i_b = 1
-   do while ( i_b <= band_chunk_eff )
-      do i_f = 1, nk_batches
-         call init_plan_cfft3d_gpu(dfft%nr1, dfft%nr2, dfft%nr3, &
-                                   dfft%nr1x,dfft%nr2x,dfft%nr3x, i_b*i_f, ind_p)
-      end do
+   do while ( i_b <= fft_cols_eff )
+      call init_plan_cfft3d_gpu(dfft%nr1, dfft%nr2, dfft%nr3, &
+                                dfft%nr1x,dfft%nr2x,dfft%nr3x, i_b, ind_p)
       i_b = 2*i_b
+   end do
+   do i_f = 1, nk_batches                    ! first H*psi: one transform per k-point of a (possibly partial) group
+      call init_plan_cfft3d_gpu(dfft%nr1, dfft%nr2, dfft%nr3, &
+                                dfft%nr1x,dfft%nr2x,dfft%nr3x, i_f, ind_p)
    end do
 #endif
 
    !
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
-   allocate( fft_array_batched(dfft%nnr, band_chunk_eff*nk_batches), aux_batched(dfft%nnr, nk_batches) )
+   allocate( fft_array_batched(dfft%nnr, max(fft_cols_eff,nk_batches)), aux_batched(dfft%nnr, nk_batches) )
    allocate (evc(npwx, nbnd), eig(nbnd))
    ! leading dimension is nbnd (not nbndx): this very first diagonalization
    ! always has nbase == nbnd (no subspace growth yet), and the batched
