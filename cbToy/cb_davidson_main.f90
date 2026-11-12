@@ -60,6 +60,7 @@ program cb_davidson_main
    INTEGER :: npwx_npol
    INTEGER :: if1, if2, if3 !! Indices declared to manage the do loops for the initialization of igk_batched and evc_batched
    INTEGER :: ind_p !Index_pointer for the cuFFT kernels
+   INTEGER :: i_b   ! bands per batched FFT call (loop variable for the plan initialization)
    TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
                                   ptr_hpsi_nb1(:), ptr_evc(:)
 
@@ -126,19 +127,41 @@ program cb_davidson_main
    npwx_npol = npwx*npol
 
 
+   !! Bands per batched FFT call in H*psi: a power of two, either given in the input (band_chunk)
+   !! or the largest one that keeps the FFT work array below a memory budget (1 GiB).
+   if (band_chunk > 0) then
+      band_chunk_eff = min(band_chunk, nbnd)
+   else
+      band_chunk_eff = nbnd
+      do while ( band_chunk_eff > 1 .and. &
+                 16_8*dfft%nnr*nk_batches*band_chunk_eff > 2_8**30 )
+         band_chunk_eff = band_chunk_eff / 2
+      end do
+   end if
+   i_f = 1                                   ! round down to a power of two
+   do while ( 2*i_f <= band_chunk_eff )
+      i_f = 2*i_f
+   end do
+   band_chunk_eff = i_f
+   print *, 'band_chunk (bands per batched FFT call) = ', band_chunk_eff
+
    !!3D FFT plans initialization:
+   !! one plan for every howmany = (power of two <= band_chunk_eff) * (number of active batches)
 #if defined(__CUDA)
    dim_fft = dfft%nnr !We populate the module variables
-   do i_f = 1, nk_batches
-      call init_plan_cfft3d_gpu(dfft%nr1, dfft%nr2, dfft%nr3, &
-                                dfft%nr1x,dfft%nr2x,dfft%nr3x, i_f, ind_p)
-      ind_p_arr(i_f) = ind_p !We store the values of the index pointers corresponding to each i_f (batch size or how_many param.)
+   i_b = 1
+   do while ( i_b <= band_chunk_eff )
+      do i_f = 1, nk_batches
+         call init_plan_cfft3d_gpu(dfft%nr1, dfft%nr2, dfft%nr3, &
+                                   dfft%nr1x,dfft%nr2x,dfft%nr3x, i_b*i_f, ind_p)
+      end do
+      i_b = 2*i_b
    end do
 #endif
 
    !
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
-   allocate( fft_array_batched(dfft%nnr, nk_batches), aux_batched(dfft%nnr, nk_batches) )
+   allocate( fft_array_batched(dfft%nnr, band_chunk_eff*nk_batches), aux_batched(dfft%nnr, nk_batches) )
    allocate (evc(npwx, nbnd), eig(nbnd))
    ! leading dimension is nbnd (not nbndx): this very first diagonalization
    ! always has nbase == nbnd (no subspace growth yet), and the batched
