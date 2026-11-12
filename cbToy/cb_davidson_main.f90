@@ -148,7 +148,6 @@ program cb_davidson_main
 
    !!3D FFT plans initialization:
    !! one plan for every power of two <= fft_cols_eff (the H*psi blocks are split in power-of-two pieces),
-   !! plus 1..nk_batches (first H*psi, whose group of k-points may be partial)
 #if defined(__CUDA)
    dim_fft = dfft%nnr !We populate the module variables
    i_b = 1
@@ -157,15 +156,11 @@ program cb_davidson_main
                                 dfft%nr1x,dfft%nr2x,dfft%nr3x, i_b, ind_p)
       i_b = 2*i_b
    end do
-   do i_f = 1, nk_batches                    ! first H*psi: one transform per k-point of a (possibly partial) group
-      call init_plan_cfft3d_gpu(dfft%nr1, dfft%nr2, dfft%nr3, &
-                                dfft%nr1x,dfft%nr2x,dfft%nr3x, i_f, ind_p)
-   end do
 #endif
 
    !
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
-   allocate( fft_array_batched(dfft%nnr, max(fft_cols_eff,nk_batches)), aux_batched(dfft%nnr, nk_batches) )
+   allocate( fft_array_batched(dfft%nnr, fft_cols_eff), aux_batched(dfft%nnr, nk_batches) )
    allocate (evc(npwx, nbnd), eig(nbnd))
    ! leading dimension is nbnd (not nbndx): this very first diagonalization
    ! always has nbase == nbnd (no subspace growth yet), and the batched
