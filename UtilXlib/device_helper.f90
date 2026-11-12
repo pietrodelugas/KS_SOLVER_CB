@@ -84,6 +84,40 @@ SUBROUTINE MYZGEMM( TRANSA, TRANSB, M, N, K, ALPHA, A, LDA, B, LDB, BETA, C, LDC
 
 END SUBROUTINE MYZGEMM
 
+SUBROUTINE MYZGEMM_H( HANDLE, TRANSA, TRANSB, M, N, K, ALPHA, A, LDA, B, LDB, BETA, C, LDC)
+    ! Same as MYZGEMM, but the product is issued with the given cuBLAS handle: its stream (set by the caller, e.g. the
+    ! stream of the OpenACC queue of the calling thread) is the one used, so the product is ordered with the other work
+    ! enqueued on that stream and no synchronization is needed. The caller passes the device addresses of the matrices
+    ! with !$acc host_data use_device(...), exactly as for MYZGEMM.
+#if defined(__CUDA)
+    use cudafor
+    use cublas
+#endif
+    IMPLICIT NONE
+#if defined(__CUDA)
+    TYPE(cublasHandle) ::             HANDLE
+#else
+    INTEGER ::                        HANDLE
+#endif
+    CHARACTER*1, INTENT(IN) ::        TRANSA, TRANSB
+    INTEGER, INTENT(IN) ::            M, N, K, LDA, LDB, LDC
+    COMPLEX*16, INTENT(IN) ::         ALPHA, BETA
+    COMPLEX*16  :: A( LDA, * ), B( LDB, * ), C( LDC, * )
+#if defined(__CUDA)
+    INTEGER :: istat, opa, opb
+    attributes(device) :: A, B, C
+    opa = CUBLAS_OP_N ; IF ( TRANSA == 'T' .OR. TRANSA == 't' ) opa = CUBLAS_OP_T
+    IF ( TRANSA == 'C' .OR. TRANSA == 'c' ) opa = CUBLAS_OP_C
+    opb = CUBLAS_OP_N ; IF ( TRANSB == 'T' .OR. TRANSB == 't' ) opb = CUBLAS_OP_T
+    IF ( TRANSB == 'C' .OR. TRANSB == 'c' ) opb = CUBLAS_OP_C
+    istat = cublasZgemm_v2( HANDLE, opa, opb, M, N, K, ALPHA, A, LDA, B, LDB, BETA, C, LDC )
+    IF ( istat /= CUBLAS_STATUS_SUCCESS ) CALL errore( 'MYZGEMM_H', 'cublasZgemm_v2 failed', ABS(istat) )
+#else
+    CALL zgemm(TRANSA, TRANSB, M, N, K, ALPHA, A, LDA, B, LDB, BETA, C, LDC)
+#endif
+
+END SUBROUTINE MYZGEMM_H
+
 SUBROUTINE MYDGEMV(TRANS,M,N,ALPHA,A,LDA,X,INCX,BETA,Y,INCY)
 #if defined(__CUDA)
     use cudafor
