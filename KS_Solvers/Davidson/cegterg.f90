@@ -147,14 +147,15 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   INTEGER :: column_section_type
     ! defines a column section for communication
   INTEGER :: ierr
-  COMPLEX(DP), ALLOCATABLE :: hc(:,:), sc(:,:), vc(:,:)
-  !$acc declare device_resident(hc, sc, vc)
+  COMPLEX(DP), ALLOCATABLE :: hc(:,:), sc(:,:), vc(:,:), vc_tmp(:,:)
+  !$acc declare device_resident(hc, sc, vc, vc_tmp)
     ! Hamiltonian on the reduced basis
     ! S matrix on the reduced basis
     ! the eigenvectors of the Hamiltonian
   !DEBUGG HOST ARRAYS:
   COMPLEX(DP) :: hc_debug(nvecx,nvecx), sc_debug(nvecx,nvecx)
   LOGICAL :: restart_now
+  INTEGER :: src_idx(nvec) ! unconverged roots, in order, for the reordering of vc
   INTEGER :: nb_slot_max, col
   REAL(DP) :: thr_conv
   REAL(DP) :: nrm
@@ -306,6 +307,9 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   ALLOCATE( vc( nvecx, nvecx ), STAT=ierr )
   IF( ierr /= 0 ) &
      CALL errore( ' cegterg ',' cannot allocate vc ', ABS(ierr) )
+  ALLOCATE( vc_tmp( nvecx, nvec ), STAT=ierr )
+  IF( ierr /= 0 ) &
+     CALL errore( ' cegterg ',' cannot allocate vc_tmp ', ABS(ierr) )
   ALLOCATE( ew( nvecx ), STAT=ierr )
   !$acc enter data create(ew) async(async_id) 
   IF( ierr /= 0 ) &
@@ -674,36 +678,33 @@ IF ( .NOT. my_done ) THEN
      !
      CALL start_clock( 'cegterg:update' )
      !
+     ! ... reorder eigenvectors so that coefficients for unconverged roots come first. This allows to use quick
+     ! ... matrix-matrix multiplications to set a new basis vector (see below). The list of the unconverged roots is
+     ! ... built on the host and the reordering is done with two kernels (instead of two per root): through a
+     ! ... temporary, because the destination column of a root can be the source of a later one.
+     ! ... ew(nbase+1:nbase+notcnv) gets the eigenvalues of these roots, for use in g_psi_ptr.
      np = 0
-     !
      DO n = 1, nvec
-        !
         IF ( .NOT. conv(n) ) THEN
-           !
-           ! ... this root not yet converged ... 
-           !
            np = np + 1
-           !
-           ! ... reorder eigenvectors so that coefficients for unconverged
-           ! ... roots come first. This allows to use quick matrix-matrix 
-           ! ... multiplications to set a new basis vector (see below)
-           !
-           IF ( np /= n ) THEN
-             !$acc parallel loop async(async_id)  
-             DO i = 1, nvecx
-               vc(i,np) = vc(i,n)
-             END DO 
-           END IF 
-           !
-           ! ... for use in g_psi_ptr
-           !
-           !$acc kernels async(async_id) 
-           ew(nbase+np) = e(n)
-           !$acc end kernels 
-           !
+           src_idx(np) = n
         END IF
-        !
      END DO
+     IF ( np > 0 ) THEN
+        !$acc parallel loop collapse(2) async(async_id) copyin(src_idx(1:np))
+        DO j = 1, np
+           DO i = 1, nvecx
+              vc_tmp(i,j) = vc(i,src_idx(j))
+           END DO
+        END DO
+        !$acc parallel loop collapse(2) async(async_id) copyin(src_idx(1:np))
+        DO j = 1, np
+           DO i = 1, nvecx
+              vc(i,j) = vc_tmp(i,j)
+              IF ( i == 1 ) ew(nbase+j) = e(src_idx(j))
+           END DO
+        END DO
+     END IF
      !
      nb1 = nbase + 1
      !
@@ -1469,6 +1470,7 @@ END IF
   DEALLOCATE( conv )
   DEALLOCATE( ew )
   DEALLOCATE( vc )
+  DEALLOCATE( vc_tmp )
   DEALLOCATE( hc )
   DEALLOCATE( sc )
 
