@@ -774,7 +774,7 @@ SUBROUTINE cfft3d_gpu_batched( f_d, nx, ny, nz, ldx, ldy, ldz, howmany, isign, s
      !
      !CALL lookup() ! We run this check during the initialization of Plans in the main program
      
-     ip = ind_p_arr(howmany) !We retrieve the index pointer corresponding to the nk_batches
+     CALL lookup() ! plans are pre-initialized (init_plan_cfft3d_gpu); here we only find the one for this howmany
      !print * , "HOWMANY value before setting stream, FIRST: ", howmany
      !print * , "IP value before setting stream, FIRST: ", ip
 
@@ -942,10 +942,12 @@ SUBROUTINE init_plan_cfft3d_gpu(nx, ny, nz, ldx, ldy, ldz, howmany, ip) !We set 
        
        call lookup()
 
-       IF (ip /= -1) THEN
-          call fftx_error__("fft_scalar_cuFFT", "Error in initialization of FFT plans", 1)
-          RETURN
-       END IF
+       ! the plan already exists (e.g. same howmany requested twice): nothing to do, ip is its index
+       IF (ip /= -1) RETURN
+
+       ! all the plan slots are in use: do not silently destroy a plan that may still be needed
+       IF ( dims(4,icurrent) /= -1 ) &
+          call fftx_error__("fft_scalar_cuFFT", "too many batched FFT plans: increase ndims in fft_param", 1)
 
         FFT_DIM(1) = nz
         FFT_DIM(2) = ny

@@ -20,7 +20,7 @@ MODULE fft_param
   INTEGER, PARAMETER :: MPI_COMM_SELF  = -2
 #endif
   
-  INTEGER, PARAMETER :: ndims = 20
+  INTEGER, PARAMETER :: ndims = 64
   !! Number of different FFT tables that the module
   !!could keep into memory without reinitialization
 
