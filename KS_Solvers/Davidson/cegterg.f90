@@ -22,12 +22,12 @@ MODULE cegterg_mod
   
   CONTAINS
 !----------------------------------------------------------------------------
-SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
+SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_psi_ptr_iter, &
                     npw, npwx, nvec, nvecx, npol, evc, ethr, e, btype, notcnv, lrot, dav_iter, nhpsi, i_batch, &
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, final_check_arr, &
                     hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, kdim_comp, notcnv_comp, &
                     ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                    psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch )
+                    psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch, eig_new_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -128,6 +128,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   INTEGER, INTENT(INOUT) :: npw_comp(n_k) !Shared array for the fft batched call in the initial part
   INTEGER, INTENT(INOUT) :: nb1_comp(n_k) !Ahared array for the fft batched call in the iterative part!
   INTEGER, INTENT(INOUT) :: slot2batch(n_k)
+  REAL(DP), INTENT(INOUT) :: eig_new_comp(nvec,n_k) ! Shared array: eigenvalues of the roots still to be converged, per slot, for the batched g_psi
   !
   !
   ! ... LOCAL variables
@@ -152,6 +153,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !DEBUGG HOST ARRAYS:
   COMPLEX(DP) :: hc_debug(nvecx,nvecx), sc_debug(nvecx,nvecx)
   LOGICAL :: restart_now
+  INTEGER :: nb_slot_max, col
+  REAL(DP) :: nrm
   INTEGER :: notcnv_slot(n_k), n_slot
   INTEGER :: nvecx_pad ! nvecx + nvec: padding so that batched Zgemm calls sized on the max over batches stay in bounds
   !
@@ -210,7 +213,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   REAL(DP), EXTERNAL :: MYDDOT_VECTOR_GPU
   !$acc routine(MYDDOT_VECTOR_GPU) vector
   !
-  EXTERNAL  h_psi_ptr,    s_psi_ptr,    g_psi_ptr,  h_psi_ptr_iter  !! We add the h_psi_ptr_iter for the iterative part and we make h_psi_ptr batched
+  EXTERNAL  h_psi_ptr,    s_psi_ptr,    g_psi_ptr,  h_psi_ptr_iter, g_psi_ptr_iter  !! We add the h_psi_ptr_iter for the iterative part and we make h_psi_ptr batched
     ! h_psi_ptr(npwx,npw,nvec,psi,hpsi,i_batch)
     !     calculates H|psi>
     ! s_psi_ptr(npwx,npw,nvec,spsi,i_batch)
@@ -225,6 +228,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !
   ! Setup GPU stream using clock_thread (Fixed)
   async_id = clock_thread
+  IF ( mp_size(intra_bgrp_comm) > 1 ) CALL errore( 'cegterg', &
+       'batched g_psi / normalization not implemented with plane-wave parallelism', 1 )
 
 #if defined(__CUDA)
   ! Get cuda stream and link cublas to it
@@ -908,66 +913,11 @@ IF ( .NOT. my_done ) THEN
      !
      ! ... approximate inverse iteration
      !
-     CALL g_psi_ptr( npwx, npw, notcnv, npol, psi(1,nb1), ew(nb1), i_batch )
      !$acc end host_data
      !
-     ! ... "normalize" correction vectors psi(:,nb1:nbase+notcnv) in
-     ! ... order to improve numerical stability of subspace diagonalization
-     ! ... (cdiaghg) ew is used as work array :
+     ! g_psi and the normalization of the correction vectors are done for all the slots at once, below,
+     ! just before the batched H*psi
      !
-     ! ...         ew = <psi_i|psi_i>,  i = nbase + 1, nbase + notcnv
-     !
-     !$acc parallel vector_length(96) async(async_id)  
-     !$acc loop gang private(nbn)
-     DO n = 1, notcnv
-        !
-        nbn = nbase + n
-        !
-        ew(n) = MYDDOT_VECTOR_GPU( 2*npw, psi(1,nbn), psi(1,nbn) )
-        !
-     END DO
-     !
-     IF(npol.ne.1) THEN 
-       !$acc loop gang private(nbn)
-       DO n = 1, notcnv 
-         nbn = nbase + n
-         ew(n) = ew(n)  + MYDDOT_VECTOR_GPU( 2*npw, psi(npwx+1,nbn), psi(npwx+1,nbn) ) 
-       END DO 
-     END IF 
-     !$acc end parallel 
-     !
-     !$acc host_data use_device(ew)
-     CALL mp_sum( ew( 1:notcnv ), intra_bgrp_comm )
-     !$acc end host_data
-     !
-#if defined(__CUDA)
-     !$acc parallel loop collapse(3) async(async_id) 
-     DO i = 1,notcnv
-        DO ipol = 1,npol
-           DO k=1,npw
-             psi(k + (ipol-1)*npwx,nbase+i) = psi(k+(ipol-1)*npwx,nbase+i)/SQRT( ew(i) )
-           END DO
-        END DO
-     END DO
-#else
-     !$omp parallel do collapse(3)
-     DO n = 1, notcnv
-        DO ipol = 1, npol
-           DO m = 1, numblock
-              psi( (m-1)*blocksize+(ipol-1)*npwx+1: &
-                    MIN(npw, m*blocksize)+(ipol-1)*npwx,nbase+n) = &
-              psi( (m-1)*blocksize+(ipol-1)*npwx+1: &
-                    MIN(npw, m*blocksize)+(ipol-1)*npwx,nbase+n) / &
-                    SQRT( ew(n) )
-           END DO
-        END DO
-     END DO
-     !$omp end parallel do
-#endif
-     !
-     !write(6,*) 'ALLOC POINT cegterg POINT 21'
-     !flush(6)
-
      ! ... here compute the hpsi and spsi of the new functions
      
 END IF
@@ -984,6 +934,7 @@ END IF
      !$acc kernels async(async_id)
      psi_fft_comp(:,:,my_slot_fft) = psi(1:(npwx*npol), 1:nvecx)
      hpsi_fft_comp(:,:,my_slot_fft) = hpsi(1:(npwx*npol), 1:nvecx)
+     eig_new_comp(1:notcnv,my_slot_fft) = ew(nb1:nb1+notcnv-1)
      npw_comp(my_slot_fft) = npw
      nb1_comp(my_slot_fft) = nb1
      slot2batch(my_slot_fft)  = i_batch
@@ -1003,6 +954,33 @@ END IF
            n_slot = n_slot + 1
            notcnv_slot(n_slot) = notcnv_comp(n)
         END IF
+     END DO
+     ! approximate inverse iteration for all the slots (the callback works on psi_fft_comp)
+     CALL g_psi_ptr_iter(npwx, npw_comp, nvecx, notcnv_slot, nb1_comp, psi_fft_comp, eig_new_comp, nvec, i_batch, n_active, slot2batch)
+     !
+     ! "normalize" the correction vectors of all the slots in order to improve numerical stability of the subspace
+     ! diagonalization: psi(:,nb1:nb1+notcnv-1) / sqrt(<psi|psi>)  (one gang for every (slot, band) pair)
+     nb_slot_max = MAXVAL( notcnv_slot(1:n_active) )
+     !$acc parallel loop gang collapse(2) async(async_id) copyin(notcnv_slot(1:n_active)) private(nrm, col)
+     DO n = 1, n_active
+        DO i = 1, nb_slot_max
+           IF ( i <= notcnv_slot(n) ) THEN
+              col = nb1_comp(n) + i - 1
+              nrm = 0.D0
+              !$acc loop vector collapse(2) reduction(+:nrm)
+              DO ipol = 1, npol
+                 DO k = 1, npw_comp(n)
+                    nrm = nrm + DBLE( psi_fft_comp(k+(ipol-1)*npwx,col,n) )**2 + AIMAG( psi_fft_comp(k+(ipol-1)*npwx,col,n) )**2
+                 END DO
+              END DO
+              !$acc loop vector collapse(2)
+              DO ipol = 1, npol
+                 DO k = 1, npw_comp(n)
+                    psi_fft_comp(k+(ipol-1)*npwx,col,n) = psi_fft_comp(k+(ipol-1)*npwx,col,n) / SQRT( nrm )
+                 END DO
+              END DO
+           END IF
+        END DO
      END DO
      CALL h_psi_ptr_iter(npwx, npw_comp, nvecx, notcnv_slot, nb1_comp, psi_fft_comp, hpsi_fft_comp, i_batch, n_active, slot2batch)
      !!$acc wait

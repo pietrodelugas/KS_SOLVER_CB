@@ -60,6 +60,7 @@ program cb_davidson_main
    INTEGER :: npwx_npol
    INTEGER :: if1, if2, if3 !! Indices declared to manage the do loops for the initialization of igk_batched and evc_batched
    INTEGER :: ind_p !Index_pointer for the cuFFT kernels
+   REAL(DP), ALLOCATABLE :: eig_new_comp(:,:)
    INTEGER :: i_b   ! columns per batched FFT call (loop variable for the plan initialization)
    TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
                                   ptr_hpsi_nb1(:), ptr_evc(:)
@@ -71,7 +72,7 @@ program cb_davidson_main
                                                     ! band group or at the parallelization level above.
 #endif
 !------------------------------------------------------------------------
-   external my_h_psi_batched, cb_h_psi, cb_s_psi_batched, cb_g_psi_batched, my_h_psi_batched_iter !!We add my_h_psi_batched for the fft in the iterat.
+   external my_h_psi_batched, cb_h_psi, cb_s_psi_batched, cb_g_psi_batched, my_h_psi_batched_iter, cb_g_psi_batched_iter !!We add my_h_psi_batched for the fft in the iterat.
    external cb_s_psi, cb_g_psi
 !  subroutine cb_h_psi(npwx,npw,nvec,psi,hpsi)  computes H*psi
 !  subroutine cb_s_psi(npwx,npw,nvec,psi,spsi)  computes S*psi (if needed)
@@ -180,6 +181,7 @@ program cb_davidson_main
    allocate( notcnv_comp(nk_batches) ) !!Allocation of array needed for batched Zgemm call
    allocate( psi_fft_comp(npwx_npol,nbndx,nk_batches), hpsi_fft_comp(npwx_npol,nbndx,nk_batches) ) !We allocate shared arr. for fft in the init. part
    allocate( npw_comp(nk_batches), nb1_comp(nk_batches), slot2batch(nk_batches) )
+   allocate( eig_new_comp(nbnd, nk_batches) )   ! eigenvalues of the roots to be converged, per slot (batched g_psi)
    allocate( ptr_hpsi(nk_batches), ptr_hpsi_nb1(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
    !$acc enter data copyin(btype)   ! shared by all the threads: it must not be transferred by one of them while the others use it
@@ -187,6 +189,7 @@ program cb_davidson_main
    !$acc enter data create(psi_fft_comp, hpsi_fft_comp)
    !$acc enter data create(npw_comp)
    !$acc enter data create(nb1_comp, slot2batch)
+   !$acc enter data create(eig_new_comp)
    !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) !! We commented the line because we manage the 
                                                                                 !! allocation/deallocation inside the cegterg subroutine!
 
@@ -242,13 +245,13 @@ program cb_davidson_main
 #if defined(__INTERCALATE_CEGTERG)
        call omp_set_lock(cegterg_locker) 
 #endif
-       call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, my_h_psi_batched_iter, &
+       call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, my_h_psi_batched_iter, cb_g_psi_batched_iter, &
                       npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
                       eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
                       nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, final_check_arr, &
                       hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, kdim_comp, notcnv_comp, &
                       ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                      psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch )
+                      psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch, eig_new_comp )
        !$acc end host_data  
 #if defined(__INTERCALATE_CEGTERG)
       call omp_unset(cegterg_locker)
