@@ -27,7 +27,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
                     n_k, hc_comp, sc_comp, vc_comp, ew_comp, done_comp, final_check_arr, &
                     hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, kdim_comp, notcnv_comp, &
                     ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                    psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch, eig_new_comp )
+                    psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch, eig_new_comp, conv_comp, ew_old_comp )
   !----------------------------------------------------------------------------
   !
   ! ... iterative solution of the eigenvalue problem:
@@ -129,6 +129,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   INTEGER, INTENT(INOUT) :: nb1_comp(n_k) !Ahared array for the fft batched call in the iterative part!
   INTEGER, INTENT(INOUT) :: slot2batch(n_k)
   REAL(DP), INTENT(INOUT) :: eig_new_comp(nvec,n_k) ! Shared array: eigenvalues of the roots still to be converged, per slot, for the batched g_psi
+  INTEGER, INTENT(INOUT) :: conv_comp(nvec,n_k)   ! Shared array (batch-indexed): converged roots of every batch, computed for all the slots at once
+  REAL(DP), INTENT(INOUT) :: ew_old_comp(nvec,n_k) ! Shared array (batch-indexed): eigenvalues of the previous iteration, for the convergence test
   !
   !
   ! ... LOCAL variables
@@ -154,6 +156,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   COMPLEX(DP) :: hc_debug(nvecx,nvecx), sc_debug(nvecx,nvecx)
   LOGICAL :: restart_now
   INTEGER :: nb_slot_max, col
+  REAL(DP) :: thr_conv
   REAL(DP) :: nrm
   INTEGER :: notcnv_slot(n_k), n_slot
   INTEGER :: nvecx_pad ! nvecx + nvec: padding so that batched Zgemm calls sized on the max over batches stay in bounds
@@ -621,6 +624,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      !$acc kernels async(async_id)
      vc(1:nvec,1:nvec) = vc_comp(:,:,i_batch)
      ew(1:nvec)        = ew_comp(:,i_batch)
+     ew_old_comp(1:nvec,i_batch) = ew_comp(:,i_batch)
      !$acc end kernels
      !$acc wait(async_id)
      !
@@ -1276,6 +1280,26 @@ END IF
                      n_active, me_bgrp, root_bgrp, intra_bgrp_comm )
         !$acc end host_data
         !$acc wait
+        !
+        ! ... test for convergence of all the slots at once: conv_comp(:,batch) is true for the roots whose
+        ! ... eigenvalue changed by less than the threshold since the previous iteration
+        !$acc parallel loop collapse(2) present(ew_comp_itr, ew_old_comp, conv_comp, btype, slot2batch)
+        DO n = 1, n_active
+           DO i = 1, nvec
+              IF ( btype(i) == 1 ) THEN
+                 thr_conv = ethr
+              ELSE
+                 thr_conv = empty_ethr
+              END IF
+              IF ( ABS( ew_comp_itr(i,n) - ew_old_comp(i,slot2batch(n)) ) < thr_conv ) THEN
+                 conv_comp(i,slot2batch(n)) = 1
+              ELSE
+                 conv_comp(i,slot2batch(n)) = 0
+              END IF
+              ew_old_comp(i,slot2batch(n)) = ew_comp_itr(i,n)
+           END DO
+        END DO
+        !$acc update self(conv_comp(1:nvec,1:n_k))
         END IF
         !$omp end single
      END IF
@@ -1304,16 +1328,8 @@ END IF
      !
      ! ... test for convergence
      !
-     !$acc parallel loop copy(conv(1:nvec)) copyin(btype(1:nvec)) async(async_id)
-     DO i = 1, nvec
-       IF(btype(i) == 1) THEN
-         conv(i) = ( ( ABS( ew(i) - e(i) ) < ethr ) )
-       ELSE
-         conv(i) = ( ( ABS( ew(i) - e(i) ) < empty_ethr ) )
-       END IF 
-     END DO 
-     ! the loop is asynchronous and conv is copied back to the host: wait before reading it
-     !$acc wait(async_id)
+     ! the test was done for all the slots right after the batched diagonalization: take the column of this batch
+     conv(1:nvec) = ( conv_comp(1:nvec,i_batch) == 1 )
      !
      ! ... next line useful for band parallelization of exact exchange
      IF ( nbgrp > 1 ) CALL mp_bcast(conv,root_bgrp_id,inter_bgrp_comm)
