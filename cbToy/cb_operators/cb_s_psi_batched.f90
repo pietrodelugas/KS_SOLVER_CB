@@ -52,28 +52,31 @@ END SUBROUTINE cb_s_psi_batched
 !----------------------------------------------------------------------------
  subroutine cb_s_psi_batched_(npwx,npw,nvec,psi,spsi,i_batch)
 !----------------------------------------------------------------------------
-! for each input wfc spsi is just psi
+! for each input wfc spsi is just psi (use_overlap = .false.), or (1+exp(-ekin))**2 * psi
+! The arrays are on the device (OpenACC data of the caller), so the work is done by an OpenACC kernel
+! on the queue of the calling thread.
 
 ! global variables
   USE cb_module, only : DP
   USE cb_module, only : use_overlap, ekin_batched
+  USE mytime, only : clock_thread
   implicit none
 ! input variables
   integer, intent(IN) :: npwx, npw, nvec, i_batch
   complex(DP),intent(IN) :: psi(npwx,nvec)
   complex(DP),intent(OUT) :: spsi(npwx,nvec)
 ! local variables
-  integer :: ivec
+  integer :: ivec, ig
 
-! for each input wfc spsi is just psi
-  if (.not.use_overlap) then
-     spsi(:,:) = psi(:,:)
-  else
-     do ivec=1,nvec
-        spsi(1:npw,ivec) = (1.d0 + exp(-ekin_batched(1:npw,i_batch)))**2 * psi(1:npw,ivec)
+  !$acc parallel loop collapse(2) async(clock_thread) present(psi, spsi)
+  do ivec=1,nvec
+     do ig=1,npwx
+        if (use_overlap .and. ig .le. npw) then
+           spsi(ig,ivec) = (1.d0 + exp(-ekin_batched(ig,i_batch)))**2 * psi(ig,ivec)
+        else
+           spsi(ig,ivec) = psi(ig,ivec)
+        end if
      end do
-  end if
+  end do
 
  end subroutine cb_s_psi_batched_
-
-
