@@ -17,7 +17,7 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   !! that only the plans for 1, 2, 4, ... fft_cols_eff columns (created at start-up) are needed.
   !! A term that needs the same (slot, band) columns (e.g. a non local part built from becp) can reuse this layout.
   use iso_fortran_env, only: dp=> real64
-  use cb_module, only: ekin_batched, vloc, igk_batched, dfft, fft_array_batched, fft_cols_eff
+  use cb_module, only: ekin_batched, vloc, igk_batched, dfft, fft_array_batched, fft_cols_eff, use_overlap
   use fft_interfaces, only: fwfft, invfft
   use mytime, only: clock_thread
   implicit none
@@ -31,6 +31,8 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   integer :: col_slot(nk_batches*nbndx), col_band(nk_batches*nbndx)
   integer :: ig, ir, ik, ib, ibr, ic, jc
   integer :: ncol, c0, nc, pos, rem, k, nnr
+  real(dp) :: dfac
+  complex(dp) :: aux
 
   nnr = dfft%nnr
 
@@ -54,14 +56,17 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
      !$acc end kernels
 
      ! G-sphere -> FFT grid
-     !$acc parallel loop collapse(2) async(clock_thread) private(jc, ik, ibr)
+     !$acc parallel loop collapse(2) async(clock_thread) private(jc, ik, ibr, aux, dfac)
      do ic = 1, nc
         do ig = 1, npwx
            jc = c0 + ic
            ik = col_slot(jc)
            if (ig .le. npw_comp(ik)) then
               ibr = col_band(jc) + nb1_comp(ik) - 1
-              fft_array_batched(dfft%nl(igk_batched(ig,slot2batch(ik))), ic) = psi(ig,ibr,ik)
+              aux = psi(ig,ibr,ik)
+              ! toy model with an overlap matrix: H' = D H D, S = D**2, D = 1 + exp(-ekin)
+              if (use_overlap) aux = (1.d0 + exp(-ekin_batched(ig,slot2batch(ik)))) * aux
+              fft_array_batched(dfft%nl(igk_batched(ig,slot2batch(ik))), ic) = aux
            end if
         end do
      end do
@@ -98,15 +103,18 @@ subroutine my_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
      end do
 
      ! FFT grid -> G-sphere, plus the kinetic energy
-     !$acc parallel loop collapse(2) async(clock_thread) private(jc, ik, ibr)
+     !$acc parallel loop collapse(2) async(clock_thread) private(jc, ik, ibr, aux, dfac)
      do ic = 1, nc
         do ig = 1, npwx
            jc = c0 + ic
            ik = col_slot(jc)
            if (ig .le. npw_comp(ik)) then
               ibr = col_band(jc) + nb1_comp(ik) - 1
-              hpsi(ig,ibr,ik) = ekin_batched(ig,slot2batch(ik)) * psi(ig,ibr,ik) +  &
-                                fft_array_batched(dfft%nl(igk_batched(ig,slot2batch(ik))), ic)
+              dfac = 1.d0
+              if (use_overlap) dfac = 1.d0 + exp(-ekin_batched(ig,slot2batch(ik)))
+              aux = dfac * psi(ig,ibr,ik)
+              hpsi(ig,ibr,ik) = dfac * ( ekin_batched(ig,slot2batch(ik)) * aux +  &
+                                         fft_array_batched(dfft%nl(igk_batched(ig,slot2batch(ik))), ic) )
            end if
         end do
      end do
