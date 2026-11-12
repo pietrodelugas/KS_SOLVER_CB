@@ -605,6 +605,9 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
         !$acc host_data use_device(hc_comp, sc_comp, ew_comp, vc_comp)
         CALL diaghg( nbase, nvec, hc_comp, sc_comp, nvec, ew_comp, vc_comp, n_k, me_bgrp, root_bgrp, intra_bgrp_comm )
         !$acc end host_data
+        ! the solver runs on the stream of this thread: wait for it before the other threads, whose queues
+        ! are not ordered after it, read vc_comp / ew_comp below
+        !$acc wait
         !$omp end single
      END IF
      !
