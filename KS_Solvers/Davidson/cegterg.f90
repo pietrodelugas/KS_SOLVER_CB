@@ -1331,6 +1331,8 @@ END IF
          conv(i) = ( ( ABS( ew(i) - e(i) ) < empty_ethr ) )
        END IF 
      END DO 
+     ! the loop is asynchronous and conv is copied back to the host: wait before reading it
+     !$acc wait(async_id)
      !
      ! ... next line useful for band parallelization of exact exchange
      IF ( nbgrp > 1 ) CALL mp_bcast(conv,root_bgrp_id,inter_bgrp_comm)
