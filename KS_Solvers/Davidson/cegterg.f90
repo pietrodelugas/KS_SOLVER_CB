@@ -42,6 +42,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   use cudafor
 #endif
   USE nvtx
+  USE cudafor, ONLY : cudaDeviceSynchronize
   USE util_param,    ONLY : DP
   USE mp_bands_util, ONLY : intra_bgrp_comm, inter_bgrp_comm, root_bgrp_id,&
                             nbgrp, my_bgrp_id, me_bgrp, root_bgrp
@@ -152,6 +153,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, &
   !DEBUGG HOST ARRAYS:
   COMPLEX(DP) :: hc_debug(nvecx,nvecx), sc_debug(nvecx,nvecx)
   LOGICAL :: restart_now
+  INTEGER :: ierr_sync
   INTEGER :: notcnv_slot(n_k), n_slot
   INTEGER :: nvecx_pad ! nvecx + nvec: padding so that batched Zgemm calls sized on the max over batches stay in bounds
   !
@@ -1365,6 +1367,8 @@ END IF
         !$acc host_data use_device(evc, psi, vc)
         CALL ZGEMM( 'N','N', kdim, nvec, my_n, ONE, psi(1,n_start), kdmx, vc(n_start,1), nvecx, &
                    ZERO, evc, kdmx )
+        ! this ZGEMM is not issued on the stream of this thread's queue, while what follows is: wait for it
+        ierr_sync = cudaDeviceSynchronize()
         
         CALL mp_sum( evc, inter_bgrp_comm )
         !$acc end host_data
@@ -1417,6 +1421,8 @@ END IF
            !
            CALL ZGEMM( 'N','N', kdim, nvec, my_n, ONE, spsi(1,n_start), kdmx, vc(n_start,1), nvecx, &
                        ZERO, psi(1,nvec+1), kdmx)
+        ! this ZGEMM is not issued on the stream of this thread's queue, while what follows is: wait for it
+        ierr_sync = cudaDeviceSynchronize()
            CALL dev_memcpy_async(spsi, psi(:,nvec+1:), mycudaStream,&
                                         (/1, npwx*npol/), 1, &
                                         (/1, nvec/), 1)
@@ -1426,6 +1432,8 @@ END IF
         !
         CALL ZGEMM( 'N','N', kdim, nvec, my_n, ONE, hpsi(1,n_start), kdmx, vc(n_start,1), nvecx, &
                     ZERO, psi(1,nvec+1), kdmx )
+        ! this ZGEMM is not issued on the stream of this thread's queue, while what follows is: wait for it
+        ierr_sync = cudaDeviceSynchronize()
         
         CALL dev_memcpy_async(hpsi, psi(:,nvec+1:), mycudaStream,&
                                         (/1, npwx*npol/), 1, &
