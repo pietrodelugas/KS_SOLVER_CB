@@ -16,6 +16,16 @@ gfortran -O2 -ffree-line-length-none -o read_dump_check tools/read_dump_check.f9
 (`mpirun` prints an error message after the final STOP; the exit code 1 is harmless.) Not supported: non-collinear and gamma-only runs.
 Files are Fortran unformatted, `access='stream'`, native endianness, 32-bit integers, 64-bit reals.
 
+## HDF5 variant (`dump_format='hdf5'`)
+The dumper can write the same data as one file `<dumpdir>/ham.h5` (QE built with HDF5, e.g. `-DQE_ENABLE_HDF5=ON`; serial HDF5 is enough).
+`qe_ham_module` uses `ham.h5` automatically when it is present in the dump directory (this repo built with `-DQE_ENABLE_HDF5=ON`).
+Layout (source: `qe_lib/qe_dump_h5.f90`, the same file is in `PP/src` of QE): root attributes `magic`, `version`, `nspin`, `nkstot`, `nbnd`, `npwx`, `nkb`, `nat`, `nsp`, `nhm`,
+`nr1..nr3`, `nr1x..nr3x`, `nnr`, `ngms`, `okvan`, `doublegrid`, `has_tests`, `v_of_0`, `omega`, `alat`, `at(9)`, `bg(9)`; root datasets `nl`, `vrs`, `ityp`, `nh`, `ofsbeta`,
+`deeq` (stored as `(nhm,nhm,nat*nspin)`), `qq_at`, `xk`, `wk`, `isk`, `ngk`; one group `k00001`, `k00002`, ... per k-point with `igk`, `g2kin`, `h_diag`, `s_diag`, `vkb`, `et` and, if
+`has_tests`, `evc`, `hpsi`, `spsi`, `hnl`. Complex arrays have a leading dimension 2 (real, imaginary). Contents are identical to the stream files (checked: same eigenvalues from the Davidson).
+`tools/dump_to_h5.f90` converts an existing stream dump (`dump_to_h5.x indir outdir [notests]`).
+Al (413 k-points): 38.7 MB with test vectors, 5.2 MB without.
+
 ## ham_global.bin (once)
 | item | type and shape |
 |---|---|
