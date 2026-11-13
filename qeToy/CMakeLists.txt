@@ -22,3 +22,7 @@ target_link_libraries(qe_read_test PRIVATE qe_toy_lib)
 qe_add_executable(qe_hpsi_test qe_hpsi_test.f90)
 set_target_properties(qe_hpsi_test PROPERTIES OUTPUT_NAME qe_hpsi_test.x)
 target_link_libraries(qe_hpsi_test PRIVATE qe_toy_lib qe_openacc_fortran)
+
+qe_add_executable(qe_davidson qe_davidson_main.f90)
+set_target_properties(qe_davidson PROPERTIES OUTPUT_NAME qe_davidson.x)
+target_link_libraries(qe_davidson PRIVATE qe_toy_lib qe_kssolver_davidson qe_lax qe_openacc_fortran qe_openmp_fortran)

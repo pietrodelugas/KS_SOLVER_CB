@@ -40,6 +40,9 @@ subroutine qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   integer :: m, npw, nb1, b, spin, ikb, na, nt, ih, jh, ofs, info
 
   nnr = dfft%nnr
+
+  ! npw_comp, nb1_comp and slot2batch are set on the device by the caller (kernels): the non local GEMMs need them on the host
+  !$acc update host(npw_comp(1:nk_batches), nb1_comp(1:nk_batches), slot2batch(1:nk_batches))
   ! NOTE: 'Rho' = full 3-D FFT of the grid (no stick pruning yet)
 
   ! list of the (slot, band) pairs

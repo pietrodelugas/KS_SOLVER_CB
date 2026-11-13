@@ -67,3 +67,28 @@ SUBROUTINE qe_g_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
      END DO
   END DO
 END SUBROUTINE qe_g_psi_batched_iter
+!
+SUBROUTINE qe_h_psi_batched(npwx, npw_comp, nbndx, nbnd, psi, hpsi, i_batch, nk_batches)
+  !! First H|psi> of the Davidson (called once per group): the iterative routine with every slot active,
+  !! all the bands to be done and the first column equal to 1.
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: nk_batches, npwx, nbnd, i_batch, nbndx
+  INTEGER, INTENT(IN) :: npw_comp(nk_batches)
+  COMPLEX(8) :: psi(npwx, nbndx, nk_batches), hpsi(npwx, nbndx, nk_batches)
+  INTEGER :: nbnd_loc(nk_batches), nb1_loc(nk_batches), s2b_loc(nk_batches), ik
+  DO ik = 1, nk_batches
+     nbnd_loc(ik) = nbnd; nb1_loc(ik) = 1; s2b_loc(ik) = ik
+  END DO
+  !$acc data copyin(nb1_loc, s2b_loc)
+  CALL qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_loc, nb1_loc, psi, hpsi, i_batch, nk_batches, s2b_loc)
+  !$acc end data
+END SUBROUTINE qe_h_psi_batched
+!
+SUBROUTINE qe_g_psi_batched(npwx, npw, nvec, npol, psi, eig, i_batch)
+  !! not used: the batched solver calls qe_g_psi_batched_iter
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: npwx, npw, nvec, npol, i_batch
+  COMPLEX(8), INTENT(INOUT) :: psi(npwx,nvec)
+  REAL(8), INTENT(IN) :: eig(nvec)
+  STOP 'qe_g_psi_batched: not used'
+END SUBROUTINE qe_g_psi_batched
