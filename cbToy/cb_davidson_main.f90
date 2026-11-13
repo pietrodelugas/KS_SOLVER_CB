@@ -100,20 +100,16 @@ program cb_davidson_main
    call initialize_cusolver_handles(nk_batches)
    call initialize_cublas_handles(nk_batches)
    print *, 'nk_batches = ', nk_batches
-   !$omp parallel num_threads(nk_batches) default(shared)  shared(t0cpu, nclock, clock_label) 
+   ! one host thread and one OpenACC queue (index 1) drive all the k-points of a group
    call init_clocks(.true.)
    call omp_init_lock(cegterg_locker) 
    call omp_init_lock(fftw_locker) 
 #if defined(__CUDA)
-   !$omp do 
-   do i_batch = 1, nk_batches
-      clock_thread = i_batch
-      clock_cuda_stream = acc_get_cuda_stream(clock_thread)
-      call initialize_laxlib_cuda_stream(clock_cuda_stream, clock_thread)
-      print '("Initialized default stream in thread ",2I5,I24)', omp_get_thread_num(), clock_thread, clock_cuda_stream
-   end do 
+   clock_thread = 1
+   clock_cuda_stream = acc_get_cuda_stream(clock_thread)
+   call initialize_laxlib_cuda_stream(clock_cuda_stream, clock_thread)
+   print '("Initialized default stream ",2I5,I24)', omp_get_thread_num(), clock_thread, clock_cuda_stream
 #endif
-   !$omp end parallel
 
    allocate(npw_batched(nk_batches)) 
    allocate(notcnv_batched(nk_batches), dav_iter_batched(nk_batches), nhpsi_batched(nk_batches))
@@ -162,33 +158,8 @@ program cb_davidson_main
    allocate( evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches) )
    allocate( fft_array_batched(dfft%nnr, fft_cols_eff), aux_batched(dfft%nnr, nk_batches) )
    allocate (evc(npwx, nbnd), eig(nbnd))
-   ! leading dimension is nbnd (not nbndx): this very first diagonalization
-   ! always has nbase == nbnd (no subspace growth yet), and the batched
-   ! cuSOLVER eigensolver only supports a leading dimension equal to the
-   ! matrix size for this call
-   allocate( hc_c(nbnd, nbnd, nk_batches), sc_c(nbnd, nbnd, nk_batches), vc_c(nbnd, nbnd, nk_batches) )
-   allocate( ew_c(nbnd, nk_batches) )
-   !allocate( evc_c(npwx, nbnd, nk_batches) )
-   allocate( done_comp(nk_batches) )
-   allocate( final_check_arr(nk_batches) )
-   allocate( nbase_comp(nk_batches) )
-   allocate( my_n_comp(nk_batches) )
-   allocate( kdim_comp(nk_batches) ) !!Allocation of the array needed for the padding before the batched Zgemm kernel call
-   allocate( notcnv_comp(nk_batches) ) !!Allocation of array needed for batched Zgemm call
-   allocate( psi_fft_comp(npwx_npol,nbndx,nk_batches), hpsi_fft_comp(npwx_npol,nbndx,nk_batches) ) !We allocate shared arr. for fft in the init. part
-   allocate( npw_comp(nk_batches), nb1_comp(nk_batches), slot2batch(nk_batches) )
-   allocate( conv_comp(nbnd, nk_batches), ew_old_comp(nbnd, nk_batches) )   ! convergence test of all the slots at once
-   allocate( eig_new_comp(nbnd, nk_batches) )   ! eigenvalues of the roots to be converged, per slot (batched g_psi)
-   allocate( ptr_hpsi(nk_batches), ptr_hpsi_nb1(nk_batches), ptr_spsi(nk_batches), ptr_psi_result(nk_batches) ) !We allocate the arrays shared for the zgemm batched calls
    !$acc enter data create(evc_batched, eig_batched, fft_array_batched, aux_batched)
-   !$acc enter data copyin(btype)   ! shared by all the threads: it must not be transferred by one of them while the others use it
-   !$acc enter data create(hc_c, sc_c, vc_c, ew_c)
-   !$acc enter data create(psi_fft_comp, hpsi_fft_comp)
-   !$acc enter data create(npw_comp)
-   !$acc enter data create(nb1_comp, slot2batch)
-   !$acc enter data create(eig_new_comp, conv_comp, ew_old_comp)
-   !!$acc enter data create(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) !! We commented the line because we manage the 
-                                                                                !! allocation/deallocation inside the cegterg subroutine!
+   !$acc enter data copyin(btype)
 
 
    do ik =1,nks, nk_batches
@@ -216,45 +187,13 @@ program cb_davidson_main
 
      call start_clock('davidson')
      
-     !$omp parallel num_threads(n_k) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
-     !$omp do
-     do i_batch = 1, n_k
-       !clock thread is declared threadprivate in the module 
-       clock_thread = i_batch 
-
-     #if defined(__CUDA) 
-   ! Reset stream for this thread in this parallel region
-       clock_cuda_stream = acc_get_cuda_stream(clock_thread)
-     #endif 
-
-       print '("First loop, batch ",3I5)', i_batch, clock_thread, omp_get_thread_num()  
-       current_k = ik + i_batch -1   
-       
-       !We comment this line because we initialized outside the omp loop
-       !call init_k(if2, if1)
-       !!$acc update device(igk_batched(:,i_batch)) async(clock_thread)
-       !
-       !call init_random_wfcs(npw_batched(if3), npwx, nbnd, evc_batched(1,1,if3),if3)  
-       !!$acc update device(evc_batched(:,:,i_batch)) async(clock_thread)
-       !
-
-       !$acc host_data use_device(eig_batched(1,i_batch))
-#if defined(__INTERCALATE_CEGTERG)
-       call omp_set_lock(cegterg_locker) 
-#endif
-       call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, my_h_psi_batched_iter, cb_g_psi_batched_iter, &
-                      npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
-                      eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
-                      nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, final_check_arr, &
-                      hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, kdim_comp, notcnv_comp, &
-                      ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                      psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch, eig_new_comp, conv_comp, ew_old_comp )
-       !$acc end host_data  
-#if defined(__INTERCALATE_CEGTERG)
-      call omp_unset(cegterg_locker)
-#endif
-     end do 
-     !$omp end parallel 
+     ! all the k-points of the group are solved by one call (single host thread, single queue)
+     clock_thread = 1
+     !$acc host_data use_device(eig_batched)
+     call cegterg( my_h_psi_batched, cb_s_psi_batched, overlap, cb_g_psi_batched, my_h_psi_batched_iter, cb_g_psi_batched_iter, &
+                   npw_batched, npwx, nbnd, nbndx, npol, evc_batched, ethr, eig_batched, btype, notcnv_batched, lrot, &
+                   dav_iter_batched, nhpsi_batched, n_k )
+     !$acc end host_data
      
      call stop_clock('davidson') 
      ! !$omp barrier   !Remove
@@ -288,32 +227,15 @@ program cb_davidson_main
    end do
    
    !$acc exit data delete(evc, eig, fft_array_batched, aux_batched)
-   !$acc exit data delete(hc_c, sc_c, vc_c, ew_c)
    !!$acc exit data delete(psi_comp, hpsi_comp, spsi_comp)
    !$acc exit data delete(dfft, dfft%nl, dfft%nnr, igk, vloc)
-   !$acc exit data delete(psi_fft_comp, hpsi_fft_comp)
-   !$acc exit data delete(npw_comp)
-   !$acc exit data delete(nb1_comp, slot2batch)
-   !$acc exit data delete(ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc)
    deallocate( eig )
    deallocate( evc )
    deallocate( evc_batched, eig_batched )
    deallocate( fft_array_batched, aux_batched )
    deallocate( notcnv_batched, dav_iter_batched, nhpsi_batched )
-   deallocate( hc_c, sc_c, vc_c, ew_c )
-   deallocate( done_comp )
-   deallocate( final_check_arr )
-   deallocate( nbase_comp )
-   deallocate( psi_fft_comp, hpsi_fft_comp )
-   deallocate( npw_comp, nb1_comp, slot2batch )
-   deallocate( kdim_comp )
-   deallocate( notcnv_comp )
-   deallocate( my_n_comp )
-   deallocate( ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result )
    
    !! We move the deallocation of the _itr arrays at the end of the program
-   !$acc exit data delete(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr) 
-   deallocate(hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr)
    
 
    call finalize_cublas_handles()
