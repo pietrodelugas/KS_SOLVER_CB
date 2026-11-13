@@ -13,11 +13,11 @@ PROGRAM qe_hpsi_test
   CHARACTER(LEN=256) :: dumpdir, arg
   INTEGER :: k0, nb, ib, ik, npw, i, cols, i_b, ind_p, nbndx
   INTEGER, ALLOCATABLE :: npw_comp(:), nbnd_comp(:), nb1_comp(:), slot2batch(:)
-  COMPLEX(dp), ALLOCATABLE :: psi(:,:,:), hpsi(:,:,:), hp(:,:), sp(:,:), hn(:,:), ev(:,:)
+  COMPLEX(dp), ALLOCATABLE :: spsi(:,:,:), psi(:,:,:), hpsi(:,:,:), hp(:,:), sp(:,:), hn(:,:), ev(:,:)
   INTEGER, ALLOCATABLE :: igk(:)
   REAL(dp), ALLOCATABLE :: g(:), h(:), s(:), et(:)
   COMPLEX(dp), ALLOCATABLE :: vk(:,:)
-  REAL(dp) :: err, emax
+  REAL(dp) :: err, emax, emax_s
   IF (COMMAND_ARGUMENT_COUNT() < 1) STOP 'usage: qe_hpsi_test.x dumpdir [k0 [nb]]'
   CALL GET_COMMAND_ARGUMENT(1, dumpdir)
   k0 = 0; nb = 4
@@ -28,7 +28,7 @@ PROGRAM qe_hpsi_test
   IF (k0 + nb > nkstot) STOP 'group beyond the number of k-points'
   CALL qe_setup_grid()
   CALL init_clocks(.TRUE.)
-  CALL initialize_cublas_handles(1)
+  CALL initialize_cublas_handles(MAX(nb,1))
   clock_thread = 1; clock_cuda_stream = acc_get_cuda_stream(clock_thread)
   cols = 1
   DO WHILE (2*cols <= nb*nbnd); cols = 2*cols; END DO
@@ -42,27 +42,40 @@ PROGRAM qe_hpsi_test
   CALL qe_open_k(TRIM(dumpdir))
   CALL qe_load_group(k0, nb)
   nbndx = nbnd
-  ALLOCATE(psi(npwx,nbndx,nb), hpsi(npwx,nbndx,nb), npw_comp(nb), nbnd_comp(nb), nb1_comp(nb), slot2batch(nb))
+  ALLOCATE(spsi(npwx,nbndx,nb), psi(npwx,nbndx,nb), hpsi(npwx,nbndx,nb), npw_comp(nb), nbnd_comp(nb), nb1_comp(nb), slot2batch(nb))
   ALLOCATE(igk(npwx), g(npwx), h(npwx), s(npwx), et(nbnd), vk(npwx,MAX(nkb,1)))
   ALLOCATE(hp(npwx,nbnd), sp(npwx,nbnd), hn(npwx,nbnd), ev(npwx,nbnd))
-  psi = 0; hpsi = 0
+  psi = 0; hpsi = 0; spsi = 0
   DO ib = 1, nb
      ik = k0 + ib; npw = ngk(ik)
      CALL qe_read_k(ik, igk, g, h, s, vk, et, ev, hp, sp, hn)
      psi(1:npw,:,ib) = ev(1:npw,:)
      npw_comp(ib) = npw; nbnd_comp(ib) = nbnd; nb1_comp(ib) = 1; slot2batch(ib) = ib
   END DO
-  !$acc enter data copyin(psi, npw_comp, nb1_comp, slot2batch) create(hpsi)
+  !$acc enter data copyin(psi, npw_comp, nb1_comp, slot2batch, spsi) create(hpsi)
   CALL qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi, hpsi, 1, nb, slot2batch)
   !$acc update host(hpsi)
-  emax = 0
+  ! S|psi>, as called by the solver once per thread (batch ib); only needed (and meaningful) for ultrasoft/PAW
+  IF (okvan) THEN
+     DO ib = 1, nb
+        CALL qe_s_psi_batched(npwx, npw_comp(ib), nbnd, psi(:,:,ib), spsi(:,:,ib), ib)
+     END DO
+     !$acc wait
+     !$acc update host(spsi)
+  END IF
+  emax = 0; emax_s = 0
   DO ib = 1, nb
      ik = k0 + ib; npw = ngk(ik)
      CALL qe_read_k(ik, igk, g, h, s, vk, et, ev, hp, sp, hn)
      err = MAXVAL(ABS(hpsi(1:npw,:,ib) - hp(1:npw,:)))
      WRITE(*,'("k-point ",i5," npw ",i5,"  max|H psi - QE| = ",es10.2)') ik, npw, err
      emax = MAX(emax, err)
+     IF (okvan) THEN
+        err = MAXVAL(ABS(spsi(1:npw,:,ib) - sp(1:npw,:)))
+        WRITE(*,'("                     max|S psi - QE| = ",es10.2)') err
+        emax_s = MAX(emax_s, err)
+     END IF
   END DO
-  IF (emax > 1.d-12) STOP 'FAILED'
+  IF (emax > 1.d-12 .OR. emax_s > 1.d-12) STOP 'FAILED'
   WRITE(*,'("M3 H psi check (kinetic + local + nonlocal): PASSED")')
 END PROGRAM qe_hpsi_test
