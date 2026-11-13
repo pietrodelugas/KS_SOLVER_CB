@@ -58,17 +58,13 @@ PROGRAM qe_davidson_main
   CALL qe_setup_grid()
   CALL initialize_cusolver_handles(nk_batches)
   CALL initialize_cublas_handles(nk_batches)
-  !$omp parallel num_threads(nk_batches) default(shared) shared(t0cpu, nclock, clock_label)
+  ! one host thread and one OpenACC queue (index 1) drive all the k-points of a group
   CALL init_clocks(.TRUE.)
   CALL omp_init_lock(cegterg_locker)
   CALL omp_init_lock(fftw_locker)
-  !$omp do
-  DO i_batch = 1, nk_batches
-     clock_thread = i_batch
-     clock_cuda_stream = acc_get_cuda_stream(clock_thread)
-     CALL initialize_laxlib_cuda_stream(clock_cuda_stream, clock_thread)
-  END DO
-  !$omp end parallel
+  clock_thread = 1
+  clock_cuda_stream = acc_get_cuda_stream(clock_thread)
+  CALL initialize_laxlib_cuda_stream(clock_cuda_stream, clock_thread)
 
   ! columns of one batched FFT block: power of two, memory budget 1 GiB
   IF (fft_cols_max > 0) THEN
@@ -90,25 +86,14 @@ PROGRAM qe_davidson_main
 
   ALLOCATE(evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches), eig_all(nbnd,nks))
   ALLOCATE(npw_batched(nk_batches), notcnv_batched(nk_batches), dav_iter_batched(nk_batches), nhpsi_batched(nk_batches))
-  ALLOCATE(hc_c(nbnd,nbnd,nk_batches), sc_c(nbnd,nbnd,nk_batches), vc_c(nbnd,nbnd,nk_batches), ew_c(nbnd,nk_batches))
-  ALLOCATE(done_comp(nk_batches), final_check_arr(nk_batches), nbase_comp(nk_batches), my_n_comp(nk_batches))
-  ALLOCATE(kdim_comp(nk_batches), notcnv_comp(nk_batches))
-  ALLOCATE(psi_fft_comp(npwx*npol,nbndx,nk_batches), hpsi_fft_comp(npwx*npol,nbndx,nk_batches))
-  ALLOCATE(npw_comp(nk_batches), nb1_comp(nk_batches), slot2batch(nk_batches))
-  ALLOCATE(conv_comp(nbnd,nk_batches), ew_old_comp(nbnd,nk_batches), eig_new_comp(nbnd,nk_batches))
-  ALLOCATE(ptr_hc(nk_batches), ptr_vc(nk_batches), ptr_sc(nk_batches), ptr_psi(nk_batches), ptr_hpsi(nk_batches), &
-           ptr_spsi(nk_batches), ptr_psi_result(nk_batches), ptr_hpsi_nb1(nk_batches), ptr_evc(nk_batches))
   !$acc enter data create(evc_batched, eig_batched)
   !$acc enter data copyin(btype)
-  !$acc enter data create(hc_c, sc_c, vc_c, ew_c, psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch)
-  !$acc enter data create(eig_new_comp, conv_comp, ew_old_comp)
 
   CALL random_seed(size=seed_n); ALLOCATE(seed(seed_n)); seed = 20251113; CALL random_seed(put=seed)
   t_start = omp_get_wtime(); t_dav = 0; ngroup = 0; t_load = 0; t_start_vec = 0
   DO ik0 = 0, nks-1, nk_batches
      n_k = MIN(nk_batches, nks - ik0)
      ngroup = ngroup + 1
-     done_comp = .FALSE.
      t0 = omp_get_wtime()
      CALL qe_load_group(ik0, n_k)
      t_load = t_load + omp_get_wtime() - t0
@@ -135,22 +120,13 @@ PROGRAM qe_davidson_main
      !$acc update device(evc_batched)
      t_start_vec = t_start_vec + omp_get_wtime() - t0
      t_group = omp_get_wtime()
-     !$omp parallel num_threads(n_k) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
-     !$omp do
-     DO i_batch = 1, n_k
-        clock_thread = i_batch
-        clock_cuda_stream = acc_get_cuda_stream(clock_thread)
-        !$acc host_data use_device(eig_batched(1,i_batch))
-        CALL cegterg( qe_h_psi_batched, qe_s_psi_batched, overlap, qe_g_psi_batched, qe_h_psi_batched_iter, qe_g_psi_batched_iter, &
-                      npw_batched(i_batch), npwx, nbnd, nbndx, npol, evc_batched(1,1,i_batch), ethr, &
-                      eig_batched(1,i_batch), btype, notcnv_batched(i_batch), lrot, dav_iter_batched(i_batch), &
-                      nhpsi_batched(i_batch), i_batch, n_k, hc_c, sc_c, vc_c, ew_c, done_comp, final_check_arr, &
-                      hc_comp_itr, sc_comp_itr, vc_comp_itr, ew_comp_itr, nbase_comp, kdim_comp, notcnv_comp, &
-                      ptr_hc, ptr_vc, ptr_sc, ptr_psi, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_psi_result, ptr_evc, my_n_comp, &
-                      psi_fft_comp, hpsi_fft_comp, npw_comp, nb1_comp, slot2batch, eig_new_comp, conv_comp, ew_old_comp )
-        !$acc end host_data
-     END DO
-     !$omp end parallel
+     ! all the k-points of the group are solved by one call (single host thread, single queue)
+     clock_thread = 1
+     !$acc host_data use_device(eig_batched)
+     CALL cegterg( qe_h_psi_batched, qe_s_psi_batched, overlap, qe_g_psi_batched, qe_h_psi_batched_iter, qe_g_psi_batched_iter, &
+                   npw_batched, npwx, nbnd, nbndx, npol, evc_batched, ethr, eig_batched, btype, notcnv_batched, lrot, &
+                   dav_iter_batched, nhpsi_batched, n_k )
+     !$acc end host_data
      !$acc wait
      !$acc update self(eig_batched)
      t_dav = t_dav + omp_get_wtime() - t_group
