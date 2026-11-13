@@ -32,7 +32,7 @@ PROGRAM qe_davidson_main
   TYPE(c_devptr), ALLOCATABLE :: ptr_hc(:), ptr_vc(:), ptr_sc(:), ptr_psi(:), ptr_hpsi(:), ptr_spsi(:), ptr_psi_result(:), &
                                  ptr_hpsi_nb1(:), ptr_evc(:)
   INTEGER :: nbndx, ik0, n_k, i_batch, ib, ig, i_b, ind_p, ik, nks, ios, iun, ngroup
-  REAL(dp) :: t_start, t_group, t_dav, rr, ri
+  REAL(dp) :: t_start, t_group, t_dav, rr, ri, t0, t_load, t_start_vec
   LOGICAL :: overlap, lrot
   INTEGER :: seed_n
   LOGICAL :: start_from_dump = .FALSE.   ! use the converged wavefunctions of the dump as start vectors (diagnostic)
@@ -104,12 +104,15 @@ PROGRAM qe_davidson_main
   !$acc enter data create(eig_new_comp, conv_comp, ew_old_comp)
 
   CALL random_seed(size=seed_n); ALLOCATE(seed(seed_n)); seed = 20251113; CALL random_seed(put=seed)
-  t_start = omp_get_wtime(); t_dav = 0; ngroup = 0
+  t_start = omp_get_wtime(); t_dav = 0; ngroup = 0; t_load = 0; t_start_vec = 0
   DO ik0 = 0, nks-1, nk_batches
      n_k = MIN(nk_batches, nks - ik0)
      ngroup = ngroup + 1
      done_comp = .FALSE.
+     t0 = omp_get_wtime()
      CALL qe_load_group(ik0, n_k)
+     t_load = t_load + omp_get_wtime() - t0
+     t0 = omp_get_wtime()
      ! start wavefunctions: random, damped with the kinetic energy (zero beyond npw)
      evc_batched = (0.d0,0.d0)
      DO i_batch = 1, n_k
@@ -130,6 +133,7 @@ PROGRAM qe_davidson_main
         END DO
      END IF
      !$acc update device(evc_batched)
+     t_start_vec = t_start_vec + omp_get_wtime() - t0
      t_group = omp_get_wtime()
      !$omp parallel num_threads(n_k) default(shared) private(i_batch) shared(t0cpu, nclock, clock_label)
      !$omp do
@@ -156,6 +160,7 @@ PROGRAM qe_davidson_main
      WRITE(*,'("group ",i4,": k ",i5,"-",i5,"  iterations ",i3,"-",i3,"  not converged ",i3,"  time ",f8.3," s")') ngroup, ik0+1, ik0+n_k, &
           MINVAL(dav_iter_batched(1:n_k)), MAXVAL(dav_iter_batched(1:n_k)), SUM(notcnv_batched(1:n_k)), omp_get_wtime() - t_group
   END DO
+  WRITE(*,'("time split: k-point setup + transfer ",f8.3," s, start vectors ",f8.3," s, Davidson ",f8.3," s")') t_load, t_start_vec, t_dav
   WRITE(*,'("Davidson time ",f9.3," s for ",i5," k-points; total ",f9.3," s")') t_dav, nks, omp_get_wtime() - t_start
 
   OPEN(NEWUNIT=iun, FILE=TRIM(out), STATUS='replace')
