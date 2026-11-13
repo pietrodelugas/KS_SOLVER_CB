@@ -34,7 +34,8 @@ PROGRAM qe_davidson_main
   INTEGER :: nbndx, ik0, n_k, i_batch, ib, ig, i_b, ind_p, ik, nks, ios, iun, ngroup
   REAL(dp) :: t_start, t_group, t_dav, rr, ri, t0, t_load, t_start_vec
   LOGICAL :: overlap, lrot
-  INTEGER :: seed_n
+  INTEGER :: seed_n, ntry, n_retry = 0
+  INTEGER, PARAMETER :: ntry_max = 5
   LOGICAL :: start_from_dump = .FALSE.   ! use the converged wavefunctions of the dump as start vectors (diagnostic)
   INTEGER, ALLOCATABLE :: igk_t(:)
   REAL(dp), ALLOCATABLE :: g_t(:), h_t(:), s_t(:), et_t(:)
@@ -122,12 +123,18 @@ PROGRAM qe_davidson_main
      t_group = omp_get_wtime()
      ! all the k-points of the group are solved by one call (single host thread, single queue)
      clock_thread = 1
-     !$acc host_data use_device(eig_batched)
-     CALL cegterg( qe_h_psi_batched, qe_s_psi_batched, overlap, qe_g_psi_batched, qe_h_psi_batched_iter, qe_g_psi_batched_iter, &
-                   npw_batched, npwx, nbnd, nbndx, npol, evc_batched, ethr, eig_batched, btype, notcnv_batched, lrot, &
-                   dav_iter_batched, nhpsi_batched, n_k )
-     !$acc end host_data
-     !$acc wait
+     ! as pw.x (c_bands): if some roots are not converged after the iterations allowed in one call, the call is repeated
+     ! starting from the vectors obtained, at most ntry_max times
+     DO ntry = 1, ntry_max
+        !$acc host_data use_device(eig_batched)
+        CALL cegterg( qe_h_psi_batched, qe_s_psi_batched, overlap, qe_g_psi_batched, qe_h_psi_batched_iter, qe_g_psi_batched_iter, &
+                      npw_batched, npwx, nbnd, nbndx, npol, evc_batched, ethr, eig_batched, btype, notcnv_batched, lrot, &
+                      dav_iter_batched, nhpsi_batched, n_k )
+        !$acc end host_data
+        !$acc wait
+        IF (ALL(notcnv_batched(1:n_k) == 0)) EXIT
+        n_retry = n_retry + 1
+     END DO
      !$acc update self(eig_batched)
      t_dav = t_dav + omp_get_wtime() - t_group
      DO i_batch = 1, n_k
@@ -137,6 +144,7 @@ PROGRAM qe_davidson_main
           MINVAL(dav_iter_batched(1:n_k)), MAXVAL(dav_iter_batched(1:n_k)), SUM(notcnv_batched(1:n_k)), omp_get_wtime() - t_group
   END DO
   WRITE(*,'("time split: k-point setup + transfer ",f8.3," s, start vectors ",f8.3," s, Davidson ",f8.3," s")') t_load, t_start_vec, t_dav
+  IF (n_retry > 0) WRITE(*,'("groups that needed more than one call of cegterg: ",i4," (extra calls, as ntry in pw.x)")') n_retry
   WRITE(*,'("Davidson time ",f9.3," s for ",i5," k-points; total ",f9.3," s")') t_dav, nks, omp_get_wtime() - t_start
 
   OPEN(NEWUNIT=iun, FILE=TRIM(out), STATUS='replace')
