@@ -1,6 +1,6 @@
 !
-! qe_hpsi_test: M2 check. Kinetic + local part of H|psi> for a group of k-points at once (one slot per k-point, all bands),
-! on the GPU, against hpsi - hnl of the dump.   usage: qe_hpsi_test.x dumpdir [k0 [nb]]
+! qe_hpsi_test: M2/M3 check. H|psi> (kinetic + local + non local) for a group of k-points at once (one slot per k-point, all bands),
+! on the GPU, against hpsi of the dump.   usage: qe_hpsi_test.x dumpdir [k0 [nb]]
 !
 PROGRAM qe_hpsi_test
   USE qe_ham_module
@@ -8,6 +8,7 @@ PROGRAM qe_hpsi_test
   USE fft_scalar_cuFFT
   USE mytime, ONLY : clock_thread, clock_cuda_stream
   USE openacc, ONLY : acc_get_cuda_stream
+  USE laxlib_cusolver_handles, ONLY : initialize_cublas_handles
   IMPLICIT NONE
   CHARACTER(LEN=256) :: dumpdir, arg
   INTEGER :: k0, nb, ib, ik, npw, i, cols, i_b, ind_p, nbndx
@@ -27,6 +28,7 @@ PROGRAM qe_hpsi_test
   IF (k0 + nb > nkstot) STOP 'group beyond the number of k-points'
   CALL qe_setup_grid()
   CALL init_clocks(.TRUE.)
+  CALL initialize_cublas_handles(1)
   clock_thread = 1; clock_cuda_stream = acc_get_cuda_stream(clock_thread)
   cols = 1
   DO WHILE (2*cols <= nb*nbnd); cols = 2*cols; END DO
@@ -36,7 +38,7 @@ PROGRAM qe_hpsi_test
      CALL init_plan_cfft3d_gpu(nr1, nr2, nr3, nr1x, nr2x, nr3x, i_b, ind_p)
      i_b = 2*i_b
   END DO
-  CALL qe_alloc_batch(nb, cols)
+  CALL qe_alloc_batch(nb, cols, nbnd)
   CALL qe_open_k(TRIM(dumpdir))
   CALL qe_load_group(k0, nb)
   nbndx = nbnd
@@ -57,10 +59,10 @@ PROGRAM qe_hpsi_test
   DO ib = 1, nb
      ik = k0 + ib; npw = ngk(ik)
      CALL qe_read_k(ik, igk, g, h, s, vk, et, ev, hp, sp, hn)
-     err = MAXVAL(ABS(hpsi(1:npw,:,ib) - (hp(1:npw,:) - hn(1:npw,:))))
-     WRITE(*,'("k-point ",i5," npw ",i5,"  max|H_kin+loc psi - QE| = ",es10.2)') ik, npw, err
+     err = MAXVAL(ABS(hpsi(1:npw,:,ib) - hp(1:npw,:)))
+     WRITE(*,'("k-point ",i5," npw ",i5,"  max|H psi - QE| = ",es10.2)') ik, npw, err
      emax = MAX(emax, err)
   END DO
   IF (emax > 1.d-12) STOP 'FAILED'
-  WRITE(*,'("M2 kinetic+local check: PASSED")')
+  WRITE(*,'("M3 H psi check (kinetic + local + nonlocal): PASSED")')
 END PROGRAM qe_hpsi_test

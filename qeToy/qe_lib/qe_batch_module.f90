@@ -13,6 +13,9 @@ MODULE qe_batch_module
   INTEGER, ALLOCATABLE :: igk_batched(:,:), spin_batched(:)
   REAL(dp), ALLOCATABLE :: g2kin_batched(:,:), hdiag_batched(:,:), sdiag_batched(:,:)
   COMPLEX(dp), ALLOCATABLE :: vkb_batched(:,:,:), fft_array_batched(:,:)
+  COMPLEX(dp), ALLOCATABLE :: becp_batched(:,:,:), ps_batched(:,:,:)   ! non local work arrays of H|psi> (indexed by slot)
+  COMPLEX(dp), ALLOCATABLE :: becp_s(:,:,:), ps_s(:,:,:)               ! the same for S|psi> (indexed by batch/thread)
+  INTEGER, ALLOCATABLE :: kb2atom(:), kb2ih(:)                          ! atom and projector index within the atom of every vkb column
 CONTAINS
   SUBROUTINE qe_setup_grid()
     ! The grid of the descriptor is the one of the dump (nothing to check against: it is the dump)
@@ -24,14 +27,20 @@ CONTAINS
     IF (nnr /= nr1*nr2*nr3) STOP 'qe_setup_grid: nnr /= nr1*nr2*nr3'
   END SUBROUTINE qe_setup_grid
   !
-  SUBROUTINE qe_alloc_batch(nb, cols)
-    INTEGER, INTENT(IN) :: nb, cols
+  SUBROUTINE qe_alloc_batch(nb, cols, nbndx)
+    INTEGER, INTENT(IN) :: nb, cols, nbndx
+    INTEGER :: na, ih
     nb_group = nb; fft_cols_eff = cols
     ALLOCATE(igk_batched(npwx,nb), spin_batched(nb), g2kin_batched(npwx,nb), hdiag_batched(npwx,nb), sdiag_batched(npwx,nb))
     ALLOCATE(vkb_batched(npwx,MAX(nkb,1),nb), fft_array_batched(nnr,cols))
+    ALLOCATE(becp_batched(MAX(nkb,1),nbndx,nb), ps_batched(MAX(nkb,1),nbndx,nb), becp_s(MAX(nkb,1),nbndx,nb), ps_s(MAX(nkb,1),nbndx,nb))
+    ALLOCATE(kb2atom(MAX(nkb,1)), kb2ih(MAX(nkb,1))); kb2atom = 1; kb2ih = 1
+    DO na = 1, nat; DO ih = 1, nh(ityp(na))
+       kb2atom(ofsbeta(na)+ih) = na; kb2ih(ofsbeta(na)+ih) = ih
+    END DO; END DO
     igk_batched = 1; spin_batched = 1; g2kin_batched = 0; hdiag_batched = 1; sdiag_batched = 1; vkb_batched = 0
-    !$acc enter data create(igk_batched, spin_batched, g2kin_batched, hdiag_batched, sdiag_batched, vkb_batched, fft_array_batched) &
-    !$acc copyin(nl, vrs, deeq, qq_at, ityp, nh, ofsbeta)
+    !$acc enter data create(igk_batched, spin_batched, g2kin_batched, hdiag_batched, sdiag_batched, vkb_batched, fft_array_batched, &
+    !$acc becp_batched, ps_batched, becp_s, ps_s) copyin(nl, vrs, deeq, qq_at, ityp, nh, ofsbeta, kb2atom, kb2ih)
   END SUBROUTINE qe_alloc_batch
   !
   SUBROUTINE qe_load_group(k0, n)
@@ -48,4 +57,20 @@ CONTAINS
     END DO
     !$acc update device(igk_batched, spin_batched, g2kin_batched, hdiag_batched, sdiag_batched, vkb_batched)
   END SUBROUTINE qe_load_group
+  !
+  SUBROUTINE qe_cublas_prepare(i_batch)
+    ! cuBLAS handle of this thread, bound to the stream of its OpenACC queue (cegterg does the same at its start)
+    USE laxlib_cusolver_handles, ONLY : cublas_handle, cublas_initialized
+    USE mytime, ONLY : clock_cuda_stream
+    USE cublas
+    INTEGER, INTENT(IN) :: i_batch
+    INTEGER :: info
+    IF (.NOT. cublas_initialized(i_batch)) THEN
+       info = cublasCreate(cublas_handle(i_batch))
+       IF (info /= CUBLAS_STATUS_SUCCESS) STOP 'qe_cublas_prepare: cublasCreate'
+       cublas_initialized(i_batch) = .TRUE.
+       info = cublasSetStream(cublas_handle(i_batch), clock_cuda_stream)
+       IF (info /= CUBLAS_STATUS_SUCCESS) STOP 'qe_cublas_prepare: cublasSetStream'
+    END IF
+  END SUBROUTINE qe_cublas_prepare
 END MODULE qe_batch_module

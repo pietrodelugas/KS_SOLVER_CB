@@ -1,7 +1,8 @@
 set(src_qe_lib
 	qe_lib/qe_ham_module.f90
 	qe_lib/qe_batch_module.f90
-	qe_operators/qe_h_psi_batched_iter.f90)
+	qe_operators/qe_h_psi_batched_iter.f90
+	qe_operators/qe_s_psi_g_psi_batched.f90)
 qe_enable_cuda_fortran("${src_qe_lib}")
 qe_add_library(qe_toy_lib ${src_qe_lib})
 qe_install_targets(qe_toy_lib)
@@ -10,6 +11,7 @@ target_link_libraries(qe_toy_lib
 	qe_fftx
 	qe_utilx
 	qe_lax
+	qe_device_lapack
 	PRIVATE
 	qe_openacc_fortran)
 

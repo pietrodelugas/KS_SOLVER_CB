@@ -17,8 +17,11 @@ subroutine qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   !! that only the plans for 1, 2, 4, ... fft_cols_eff columns (created at start-up) are needed.
   !! A term that needs the same (slot, band) columns (e.g. a non local part built from becp) can reuse this layout.
   use iso_fortran_env, only: dp=> real64
-  use qe_batch_module, only: g2kin_batched, igk_batched, spin_batched, dfft, fft_array_batched, fft_cols_eff
-  use qe_ham_module, only: nl, vrs
+  use qe_batch_module, only: g2kin_batched, igk_batched, spin_batched, dfft, fft_array_batched, fft_cols_eff, &
+                             vkb_batched, becp_batched, ps_batched, kb2atom, kb2ih
+  use qe_ham_module, only: nl, vrs, nkb, deeq, nh, ityp, ofsbeta
+  use laxlib_cusolver_handles, only: cublas_handle
+  use qe_batch_module, only: qe_cublas_prepare
   use fft_interfaces, only: fwfft, invfft
   use mytime, only: clock_thread
   implicit none
@@ -33,7 +36,8 @@ subroutine qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   integer :: ig, ir, ik, ib, ibr, ic, jc
   integer :: ncol, c0, nc, pos, rem, k, nnr
   real(dp) :: dfac
-  complex(dp) :: aux
+  complex(dp) :: aux, acc
+  integer :: m, npw, nb1, b, spin, ikb, na, nt, ih, jh, ofs, info
 
   nnr = dfft%nnr
   ! NOTE: 'Rho' = full 3-D FFT of the grid (no stick pruning yet)
@@ -118,6 +122,36 @@ subroutine qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
      end do
   end do
   !$acc wait(clock_thread)
+
+  ! Non local part  hpsi += vkb D vkb^H psi, one GEMM pair per active slot on the stream of this thread:
+  ! becp = vkb^H psi_new ; ps = D becp (kernel) ; hpsi_new += vkb ps
+  if (nkb > 0) then
+     call qe_cublas_prepare(i_batch)
+     do ik = 1, nk_batches
+        m = nbnd_comp(ik); if (m <= 0) cycle
+        npw = npw_comp(ik); nb1 = nb1_comp(ik); b = slot2batch(ik)
+        !$acc host_data use_device(vkb_batched, psi, becp_batched)
+        call myzgemm_h( cublas_handle(i_batch), 'C', 'N', nkb, m, npw, (1._dp,0._dp), vkb_batched(1,1,b), npwx, &
+                        psi(1,nb1,ik), npwx, (0._dp,0._dp), becp_batched(1,1,ik), nkb )
+        !$acc end host_data
+        !$acc parallel loop collapse(2) async(clock_thread) present(ps_batched, becp_batched, deeq, nh, ityp, ofsbeta, kb2atom, kb2ih, spin_batched) private(na, nt, ofs, spin, acc)
+        do ic = 1, m
+           do ikb = 1, nkb
+              na = kb2atom(ikb); nt = ityp(na); ofs = ofsbeta(na); spin = spin_batched(b)
+              acc = (0._dp,0._dp)
+              do jh = 1, nh(nt)
+                 acc = acc + deeq(kb2ih(ikb),jh,na,spin) * becp_batched(ofs+jh,ic,ik)
+              end do
+              ps_batched(ikb,ic,ik) = acc
+           end do
+        end do
+        !$acc host_data use_device(vkb_batched, ps_batched, hpsi)
+        call myzgemm_h( cublas_handle(i_batch), 'N', 'N', npw, m, nkb, (1._dp,0._dp), vkb_batched(1,1,b), npwx, &
+                        ps_batched(1,1,ik), nkb, (1._dp,0._dp), hpsi(1,nb1,ik), npwx )
+        !$acc end host_data
+     end do
+     !$acc wait(clock_thread)
+  end if
   !$acc end data
 
 end subroutine qe_h_psi_batched_iter
