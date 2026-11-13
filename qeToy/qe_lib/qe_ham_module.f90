@@ -21,6 +21,7 @@ MODULE qe_ham_module
   REAL(dp), PUBLIC :: ecutwfc, tpiba, dq_tab
   INTEGER, ALLOCATABLE, PUBLIC :: mill(:,:), indv(:,:), nhtol(:,:), nhtolm(:,:)
   REAL(dp), ALLOCATABLE, PUBLIC :: tau(:,:), tab(:,:,:)
+  LOGICAL, PUBLIC :: kcompute = .FALSE.    ! the k-points are computed from the setup (qe_kpoint_module) instead of read from the dump
   LOGICAL, PUBLIC :: dump_has_tests = .TRUE.   ! test vectors (evc, hpsi, spsi, hnl) present in ham_k.bin
   INTEGER(8), ALLOCATABLE :: koffset(:)         ! first byte of each k-point block
   INTEGER :: iun_k = -1

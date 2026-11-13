@@ -26,6 +26,15 @@ Layout (source: `qe_lib/qe_dump_h5.f90`, the same file is in `PP/src` of QE): ro
 `tools/dump_to_h5.f90` converts an existing stream dump (`dump_to_h5.x indir outdir [notests]`).
 Al (413 k-points): 38.7 MB with test vectors, 5.2 MB without.
 
+## Setup data for arbitrary k-points (dumper v2: `ham_setup.bin`, or group `setup` of `ham.h5`)
+With these data qeToy computes `igk`, `g2kin`, `vkb`, `h_diag`, `s_diag` of ANY k-point (module `qe_kpoint_module`, no QE, no symmetry); the per-k blocks of the dump are then not needed
+(use a dump without test vectors; the k-point list is only used for `kmode='dump'`). Contents: `lmaxkb`, `nbetam`, `nqx`; `ecutwfc` (Ry), `tpiba`, `dq` (the step of the table, 0.01 a.u.);
+`tau(3,nat)` (alat units); `mill(3,ngms)` Miller indices of the G vectors in the order of `nl`; `tab(nqx,nbetam,nsp)` radial beta functions beta(q)/sqrt(omega) at q=(iq-1)*dq, cubic Lagrange
+interpolation between nodes as `interp_beta` of QE (obtained by sampling `interp_beta` after extending QE's table with `init_tab_beta`: the table of `beta_mod` is private and ends just beyond the
+largest q of the run); `indv(nhm,nsp)`, `nhtol(nhm,nsp)`, `nhtolm(nhm,nsp)`. Binary file: `20251114, lmaxkb, nbetam, nqx` (int32), `ecutwfc, tpiba, dq`, `tau`, `mill`, `tab`, `indv, nhtol, nhtolm`.
+Check (`qe_kpoint_test.x dumpdir`): all 413 k-points of the Al run reproduce QE's G vectors and their order, `g2kin`, `h_diag` (4e-15) and `vkb` (2e-16).
+k-point sets of the miniapp (`kmode` in the input): `dump` (those of the run), `list`, `path` (vertices and points per segment, as `tpiba_b` of pw.x) and `mp` (full Monkhorst-Pack grid, no symmetry).
+
 ## ham_global.bin (once)
 | item | type and shape |
 |---|---|

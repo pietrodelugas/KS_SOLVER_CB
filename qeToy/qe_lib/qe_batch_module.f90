@@ -4,6 +4,7 @@
 !
 MODULE qe_batch_module
   USE qe_ham_module
+  USE qe_kpoint_module, ONLY : qe_make_kpoint
   USE fft_types, ONLY : fft_type_descriptor
   USE openacc, ONLY : c_devptr
   IMPLICIT NONE
@@ -57,7 +58,13 @@ CONTAINS
     igk_batched = 1; g2kin_batched = 0; hdiag_batched = 1; sdiag_batched = 1; vkb_batched = 0
     DO ib = 1, n
        ik = k0 + ib; npw = ngk(ik)
-       CALL qe_read_k(ik, igk_batched(:,ib), g2kin_batched(:,ib), hdiag_batched(:,ib), sdiag_batched(:,ib), vkb_batched(:,:,ib), et)
+       IF (kcompute) THEN
+          CALL qe_make_kpoint(xk(:,ik), isk(ik), npwx, npw, igk_batched(:,ib), g2kin_batched(:,ib), hdiag_batched(:,ib), &
+                              sdiag_batched(:,ib), vkb_batched(:,:,ib))
+          IF (npw /= ngk(ik)) STOP 'qe_load_group: inconsistent number of plane waves'
+       ELSE
+          CALL qe_read_k(ik, igk_batched(:,ib), g2kin_batched(:,ib), hdiag_batched(:,ib), sdiag_batched(:,ib), vkb_batched(:,:,ib), et)
+       END IF
        spin_batched(ib) = isk(ik)
     END DO
     !$acc update device(igk_batched, spin_batched, g2kin_batched, hdiag_batched, sdiag_batched, vkb_batched)

@@ -4,6 +4,7 @@ PROGRAM qe_davidson_main
   !!   nks_max (use only the first nks_max k-points, 0 = all), out (eigenvalue file, eV)
   USE qe_ham_module
   USE qe_batch_module
+  USE qe_kpoints_input
   USE cegterg_mod
   USE mytime, ONLY : t0cpu, clock_label, nclock, clock_thread, clock_cuda_stream, fftw_locker, cegterg_locker
   USE omp_lib, ONLY : omp_get_thread_num, omp_init_lock, omp_get_wtime
@@ -15,9 +16,11 @@ PROGRAM qe_davidson_main
   INTEGER, PARAMETER :: npol = 1
   REAL(dp), PARAMETER :: ry2ev = 13.605693122994d0
   CHARACTER(LEN=256) :: dumpdir, out
+  CHARACTER(LEN=8) :: kmode = 'dump'      ! 'dump', 'list', 'path' or 'mp' (see qe_kpoints_input)
+  INTEGER :: nk1 = 1, nk2 = 1, nk3 = 1, k1 = 0, k2 = 0, k3 = 0
   INTEGER :: nk_batches, david, fft_cols_max, nks_max
   REAL(dp) :: ethr
-  NAMELIST /qe/ dumpdir, nk_batches, david, ethr, fft_cols_max, nks_max, out, start_from_dump, nonlocal_batched
+  NAMELIST /qe/ dumpdir, nk_batches, david, ethr, fft_cols_max, nks_max, out, start_from_dump, nonlocal_batched, kmode, nk1, nk2, nk3, k1, k2, k3
   COMPLEX(dp), ALLOCATABLE :: evc_batched(:,:,:)
   REAL(dp), ALLOCATABLE :: eig_batched(:,:), eig_all(:,:), eig_new_comp(:,:), ew_old_comp(:,:), ew_c(:,:), ew_comp_itr(:,:)
   INTEGER, ALLOCATABLE :: btype(:), notcnv_batched(:), dav_iter_batched(:), nhpsi_batched(:), conv_comp(:,:)
@@ -42,6 +45,7 @@ PROGRAM qe_davidson_main
   dumpdir = 'dump'; nk_batches = 4; david = 4; ethr = 1.d-8; fft_cols_max = 0; nks_max = 0; out = 'eigenvalues_eV.txt'
   READ(5, nml=qe)
   CALL qe_read_global(TRIM(dumpdir))
+  CALL qe_set_kpoints(kmode, [nk1, nk2, nk3], [k1, k2, k3], 5)
   nks = nkstot; IF (nks_max > 0) nks = MIN(nks, nks_max)
   nk_batches = MIN(nk_batches, nks)
   IF (david < 2) STOP 'david must be at least 2'
@@ -82,7 +86,7 @@ PROGRAM qe_davidson_main
      i_b = 2*i_b
   END DO
   CALL qe_alloc_batch(nk_batches, fft_cols_eff, nbndx)
-  CALL qe_open_k(TRIM(dumpdir))
+  IF (.NOT. kcompute) CALL qe_open_k(TRIM(dumpdir))
 
   ALLOCATE(evc_batched(npwx,nbnd,nk_batches), eig_batched(nbnd,nk_batches), eig_all(nbnd,nks))
   ALLOCATE(npw_batched(nk_batches), notcnv_batched(nk_batches), dav_iter_batched(nk_batches), nhpsi_batched(nk_batches))

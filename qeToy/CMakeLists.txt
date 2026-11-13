@@ -2,6 +2,7 @@ set(src_qe_lib
 	qe_lib/qe_dump_h5.f90
 	qe_lib/qe_ham_module.f90
 	qe_lib/qe_kpoint_module.f90
+	qe_lib/qe_kpoints_input.f90
 	qe_lib/qe_batch_module.f90
 	qe_operators/qe_h_psi_batched_iter.f90
 	qe_operators/qe_s_psi_g_psi_batched.f90)
