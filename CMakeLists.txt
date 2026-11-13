@@ -595,6 +595,7 @@ add_subdirectory(DEVMEMLIB)
 add_subdirectory(LAXlib)
 add_subdirectory(KS_Solvers)
 add_subdirectory(cbToy)
+add_subdirectory(qeToy)
 
 ###########################################################
 # Pkg-config
