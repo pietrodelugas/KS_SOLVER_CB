@@ -17,6 +17,11 @@ MODULE qe_batch_module
   COMPLEX(dp), ALLOCATABLE :: vkb_batched(:,:,:), fft_array_batched(:,:)
   COMPLEX(dp), ALLOCATABLE :: becp_batched(:,:,:), ps_batched(:,:,:)   ! non local work arrays of H|psi> (indexed by slot)
   COMPLEX(dp), ALLOCATABLE :: becp_s(:,:,:), ps_s(:,:,:)               ! the same for S|psi> (indexed by batch/thread)
+  ! S|psi> of the new vectors, computed together with the non local part of H|psi> (shared becp) and indexed by batch:
+  COMPLEX(dp), ALLOCATABLE :: spsi_batch(:,:,:), ps2_batched(:,:,:)
+  INTEGER, ALLOCATABLE :: sp_nb1(:), sp_m(:)          ! first column and number of columns of the valid S|psi> of every batch (host)
+  LOGICAL, ALLOCATABLE :: sp_valid(:)                  ! S|psi> of batch ib is already computed (set by H|psi>, cleared by qe_s_psi_batched)
+  TYPE(c_devptr), ALLOCATABLE :: ptr_ps2(:), ptr_sp_w(:)
   LOGICAL :: nonlocal_batched = .TRUE.                                 ! one batched GEMM pair for all the slots (else a GEMM pair per slot)
   TYPE(c_devptr), ALLOCATABLE :: ptr_vkb(:), ptr_psi_w(:), ptr_becp(:), ptr_ps(:), ptr_hpsi_w(:)   ! pointer arrays of the batched GEMMs (device)
   INTEGER, ALLOCATABLE :: kb2atom(:), kb2ih(:)                          ! atom and projector index within the atom of every vkb column
@@ -39,6 +44,12 @@ CONTAINS
     ALLOCATE(vkb_batched(npwx,MAX(nkb,1),nb), fft_array_batched(nnr,cols))
     ALLOCATE(becp_batched(MAX(nkb,1),nbndx,nb), ps_batched(MAX(nkb,1),nbndx,nb), becp_s(MAX(nkb,1),nbndx,nb), ps_s(MAX(nkb,1),nbndx,nb))
     ALLOCATE(kb2atom(MAX(nkb,1)), kb2ih(MAX(nkb,1))); kb2atom = 1; kb2ih = 1
+    IF (okvan) THEN
+       ALLOCATE(spsi_batch(npwx,nbndx,nb), ps2_batched(MAX(nkb,1),nbndx,nb), ptr_ps2(nb), ptr_sp_w(nb))
+       spsi_batch = 0; ps2_batched = 0
+       !$acc enter data create(spsi_batch, ps2_batched, ptr_ps2, ptr_sp_w)
+    END IF
+    ALLOCATE(sp_nb1(nb), sp_m(nb), sp_valid(nb)); sp_nb1 = 1; sp_m = 0; sp_valid = .FALSE.
     ALLOCATE(ptr_vkb(nb), ptr_psi_w(nb), ptr_becp(nb), ptr_ps(nb), ptr_hpsi_w(nb))
     !$acc enter data create(ptr_vkb, ptr_psi_w, ptr_becp, ptr_ps, ptr_hpsi_w)
     DO na = 1, nat; DO ih = 1, nh(ityp(na))

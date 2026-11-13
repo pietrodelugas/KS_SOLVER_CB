@@ -1,7 +1,7 @@
 SUBROUTINE qe_s_psi_batched( npwx, npw, nvec, psi, spsi, i_batch )
   !! S|psi> = psi + vkb qq vkb^H psi for the calling thread (batch i_batch); arrays are on the device.
   !! Only meaningful for ultrasoft/PAW (cegterg calls it when uspp is true); GEMMs on the stream of the thread.
-  USE qe_batch_module, ONLY : vkb_batched, becp_s, ps_s, kb2atom, kb2ih, qe_cublas_prepare
+  USE qe_batch_module, ONLY : vkb_batched, becp_s, ps_s, kb2atom, kb2ih, qe_cublas_prepare, spsi_batch, sp_nb1, sp_m, sp_valid
   USE qe_ham_module, ONLY : nkb, qq_at, nh, ityp, ofsbeta
   USE laxlib_cusolver_handles, ONLY : cublas_handle
   USE mytime, ONLY : clock_thread
@@ -9,8 +9,22 @@ SUBROUTINE qe_s_psi_batched( npwx, npw, nvec, psi, spsi, i_batch )
   INTEGER, INTENT(IN) :: npwx, npw, nvec, i_batch
   COMPLEX(8), INTENT(IN) :: psi(npwx,nvec)
   COMPLEX(8), INTENT(OUT) :: spsi(npwx,nvec)
-  INTEGER :: ic, ikb, jh, na, nt, ofs
+  INTEGER :: ic, ikb, jh, na, nt, ofs, c1
   COMPLEX(8) :: acc
+  ! S|psi> already computed with the non local part of H|psi> (batched over the slots): copy the columns of this batch
+  IF (sp_valid(i_batch)) THEN
+     sp_valid(i_batch) = .FALSE.
+     IF (sp_m(i_batch) == nvec) THEN
+        c1 = sp_nb1(i_batch)
+        !$acc parallel loop collapse(2) async(clock_thread) present(spsi, spsi_batch) firstprivate(c1)
+        DO ic = 1, nvec
+           DO ikb = 1, npwx
+              spsi(ikb,ic) = spsi_batch(ikb, c1+ic-1, i_batch)
+           END DO
+        END DO
+        RETURN
+     END IF
+  END IF
   CALL qe_cublas_prepare(i_batch)
   !$acc parallel loop collapse(2) async(clock_thread) present(psi, spsi)
   DO ic = 1, nvec

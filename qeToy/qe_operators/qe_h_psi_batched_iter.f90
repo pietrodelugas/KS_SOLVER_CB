@@ -173,7 +173,8 @@ subroutine qe_nonlocal_hpsi_batched(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, 
   use iso_fortran_env, only: dp => real64
   use qe_batch_module, only: vkb_batched, becp_batched, ps_batched, spin_batched, kb2atom, kb2ih, &
                              ptr_vkb, ptr_psi_w, ptr_becp, ptr_ps, ptr_hpsi_w
-  use qe_ham_module, only: nkb, deeq, nh, ityp, ofsbeta
+  use qe_ham_module, only: nkb, deeq, nh, ityp, ofsbeta, qq_at, okvan
+  use qe_batch_module, only: spsi_batch, ps2_batched, ptr_ps2, ptr_sp_w, sp_nb1, sp_m, sp_valid
   use laxlib_cusolver_handles, only: cublas_handle
   use mytime, only: clock_thread
   use openacc, only: acc_deviceptr
@@ -184,7 +185,7 @@ subroutine qe_nonlocal_hpsi_batched(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, 
   complex(dp) :: psi(npwx, nbndx, ns), hpsi(npwx, nbndx, ns)
   integer :: s, b, mm, ic, ikb, jh, na, nt, ofs, spin, col, info
   integer :: c0(ns), nb1(ns), m(ns), bt(ns)
-  complex(dp) :: acc
+  complex(dp) :: acc, acc2
 
   mm = maxval(nbnd_comp(1:ns))
   if (mm <= 0) return
@@ -196,27 +197,34 @@ subroutine qe_nonlocal_hpsi_batched(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, 
      ptr_becp(s)   = acc_deviceptr(becp_batched(1,1,s))
      ptr_ps(s)     = acc_deviceptr(ps_batched(1,1,s))
      ptr_hpsi_w(s) = acc_deviceptr(hpsi(1,c0(s),s))
+     if (okvan) ptr_ps2(s)  = acc_deviceptr(ps2_batched(1,1,s))
+     if (okvan) ptr_sp_w(s) = acc_deviceptr(spsi_batch(1,c0(s),bt(s)))
   end do
   !$acc update device(ptr_vkb(1:ns), ptr_psi_w(1:ns), ptr_becp(1:ns), ptr_ps(1:ns), ptr_hpsi_w(1:ns))
+  if (okvan) then
+     !$acc update device(ptr_ps2(1:ns), ptr_sp_w(1:ns))
+  end if
 
   !$acc host_data use_device(ptr_vkb, ptr_psi_w, ptr_becp)
   info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nkb, mm, npwx, (1._dp,0._dp), &
                             ptr_vkb, npwx, ptr_psi_w, npwx, (0._dp,0._dp), ptr_becp, nkb, ns)
   !$acc end host_data
 
-  !$acc parallel loop collapse(3) async(clock_thread) copyin(c0, nb1, m, bt) present(ps_batched, becp_batched, deeq, nh, ityp, ofsbeta, kb2atom, kb2ih, spin_batched) private(na, nt, ofs, spin, col, acc, jh)
+  !$acc parallel loop collapse(3) async(clock_thread) copyin(c0, nb1, m, bt) present(ps_batched, becp_batched, deeq, qq_at, nh, ityp, ofsbeta, kb2atom, kb2ih, spin_batched) private(na, nt, ofs, spin, col, acc, acc2, jh)
   do s = 1, ns
      do ic = 1, mm
         do ikb = 1, nkb
            col = c0(s) + ic - 1
-           acc = (0._dp,0._dp)
+           acc = (0._dp,0._dp); acc2 = (0._dp,0._dp)
            if (col >= nb1(s) .and. col <= nb1(s) + m(s) - 1) then
               na = kb2atom(ikb); nt = ityp(na); ofs = ofsbeta(na); spin = spin_batched(bt(s))
               do jh = 1, nh(nt)
                  acc = acc + deeq(kb2ih(ikb),jh,na,spin) * becp_batched(ofs+jh,ic,s)
+                 acc2 = acc2 + qq_at(kb2ih(ikb),jh,na) * becp_batched(ofs+jh,ic,s)
               end do
            end if
            ps_batched(ikb,ic,s) = acc
+           if (okvan) ps2_batched(ikb,ic,s) = acc2
         end do
      end do
   end do
@@ -225,5 +233,24 @@ subroutine qe_nonlocal_hpsi_batched(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, 
   info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, npwx, mm, nkb, (1._dp,0._dp), &
                             ptr_vkb, npwx, ptr_ps, nkb, (1._dp,0._dp), ptr_hpsi_w, npwx, ns)
   !$acc end host_data
+
+  ! S|psi> of the same columns (ultrasoft/PAW): spsi = psi + vkb qq becp, written into spsi_batch(:,window,batch)
+  if (okvan) then
+     !$acc parallel loop collapse(3) async(clock_thread) copyin(c0, bt) present(psi, spsi_batch)
+     do s = 1, ns
+        do ic = 1, mm
+           do ikb = 1, npwx
+              spsi_batch(ikb, c0(s)+ic-1, bt(s)) = psi(ikb, c0(s)+ic-1, s)
+           end do
+        end do
+     end do
+     !$acc host_data use_device(ptr_vkb, ptr_ps2, ptr_sp_w)
+     info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, npwx, mm, nkb, (1._dp,0._dp), &
+                               ptr_vkb, npwx, ptr_ps2, nkb, (1._dp,0._dp), ptr_sp_w, npwx, ns)
+     !$acc end host_data
+     do s = 1, ns
+        sp_nb1(bt(s)) = nb1(s); sp_m(bt(s)) = m(s); sp_valid(bt(s)) = .true.
+     end do
+  end if
   !$acc wait(clock_thread)
 end subroutine qe_nonlocal_hpsi_batched
