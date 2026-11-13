@@ -1,16 +1,16 @@
-# qe_dump: data of a QE run for the batched miniapp
+# Dump format: data of a QE run for the batched miniapp
 
-`dump_ham.f90` (derived from `~/q-e/PP/src/pp_example.f90`) reads a finished QE run and writes, for every k-point, what is needed to
+`dump_ham.x` (source: `PP/src/dump_ham.f90` in the Quantum ESPRESSO tree, derived from `pp_example.f90`) reads a finished QE run and writes, for every k-point, what is needed to
 build H|psi> and S|psi> outside QE, plus QE's own results on test vectors. `read_dump_check.f90` rebuilds H|psi>, S|psi>, `h_diag`
 and `s_diag` from the dumped data alone (QE-independent, gfortran) and compares them with QE's.
 
 ## Build and run
+The dumper is part of Quantum ESPRESSO (`PP/src/dump_ham.f90`; target `dump_ham.x` in the PP Makefile and `qe_pp_dump_ham_exe` in PP/CMakeLists.txt).
 ```
-source env.sh                                    # 26.3 HPC SDK compilers (the QE build uses them)
-./build_qe_tool.sh dump_ham.f90 dump_ham.x       # links against ~/q-e/build_cpu_ref (override with QE_BUILD=...)
+cd <qe>/PP && make dump_ham.x                    # after building pw and the PP libraries
 printf " &inputpp\n  outdir='./tmp', prefix='al', dumpdir='./dump_al'\n /\n" > dump.in
-mpirun --allow-run-as-root -np 1 ./dump_ham.x -i dump.in      # after pw.x scf + nscf with the same outdir/prefix
-gfortran -O2 -ffree-line-length-none -o read_dump_check read_dump_check.f90
+mpirun -np 1 <qe>/bin/dump_ham.x -i dump.in      # after pw.x scf + nscf with the same outdir/prefix
+gfortran -O2 -ffree-line-length-none -o read_dump_check tools/read_dump_check.f90
 ./read_dump_check dump_al [k ...]                # default: first, middle and last k-point
 ```
 (`mpirun` prints an error message after the final STOP; the exit code 1 is harmless.) Not supported: non-collinear and gamma-only runs.
