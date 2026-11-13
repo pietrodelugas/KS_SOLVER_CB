@@ -19,12 +19,13 @@ MODULE qe_dump_h5
   INTEGER, PARAMETER, PUBLIC :: nihead = 19
   TYPE(qeh5_file) :: hf
   INTERFACE put
-     MODULE PROCEDURE put_i1, put_r1, put_r2, put_r3, put_c2
+     MODULE PROCEDURE put_i1, put_i2, put_i3, put_r1, put_r2, put_r3, put_c2
   END INTERFACE
   INTERFACE get
-     MODULE PROCEDURE get_i1, get_r1, get_r2, get_r3, get_c2
+     MODULE PROCEDURE get_i1, get_i2, get_i3, get_r1, get_r2, get_r3, get_c2
   END INTERFACE
   PUBLIC :: dump_h5_create, dump_h5_write_global, dump_h5_write_k, dump_h5_close
+  PUBLIC :: dump_h5_write_setup, dump_h5_has_setup, dump_h5_read_setup_head, dump_h5_read_setup
   PUBLIC :: dump_h5_open_read, dump_h5_read_head, dump_h5_read_global, dump_h5_read_k
   CHARACTER(LEN=*), PARAMETER :: ihead_names(nihead) = [CHARACTER(LEN=10) :: 'magic', 'nspin', 'nkstot', 'nbnd', 'npwx', 'nkb', &
        'nat', 'nsp', 'nhm', 'nr1', 'nr2', 'nr3', 'nr1x', 'nr2x', 'nr3x', 'nnr', 'ngms', 'okvan', 'doublegrid']
@@ -68,6 +69,51 @@ CONTAINS
     CALL put(hf, 'qq_at', qq_at)
     CALL put(hf, 'xk', xk); CALL put(hf, 'wk', wk); CALL put(hf, 'isk', isk); CALL put(hf, 'ngk', ngk)
   END SUBROUTINE dump_h5_write_global
+  !
+  ! Data to rebuild the k dependent part of the Hamiltonian for arbitrary k-points (group 'setup', see DUMP_FORMAT.md):
+  ! ihs = [lmaxkb, nbetam, nqx], rhs = [ecutwfc, tpiba, dq]
+  SUBROUTINE dump_h5_write_setup(ihs, rhs, tau, mill, tab, indv, nhtol, nhtolm)
+    INTEGER, INTENT(IN) :: ihs(3), mill(:,:), indv(:,:), nhtol(:,:), nhtolm(:,:)
+    REAL(dp), INTENT(IN) :: rhs(3), tau(:,:), tab(:,:,:)
+    TYPE(qeh5_file) :: g
+    CALL qeh5_open_group(hf, 'setup', g)
+    CALL qeh5_add_attribute(g%id, 'lmaxkb', ihs(1)); CALL qeh5_add_attribute(g%id, 'nbetam', ihs(2))
+    CALL qeh5_add_attribute(g%id, 'nqx', ihs(3))
+    CALL qeh5_add_attribute(g%id, 'ecutwfc', rhs(1)); CALL qeh5_add_attribute(g%id, 'tpiba', rhs(2))
+    CALL qeh5_add_attribute(g%id, 'dq', rhs(3))
+    CALL put(g, 'tau', tau); CALL put(g, 'mill', mill); CALL put(g, 'tab', tab)
+    CALL put(g, 'indv', indv); CALL put(g, 'nhtol', nhtol); CALL put(g, 'nhtolm', nhtolm)
+    CALL qeh5_close(g)
+  END SUBROUTINE dump_h5_write_setup
+  !
+  LOGICAL FUNCTION dump_h5_has_setup()
+    USE hdf5, ONLY : h5lexists_f
+    INTEGER :: ierr
+    LOGICAL :: ex
+    CALL h5lexists_f(hf%id, 'setup', ex, ierr)
+    dump_h5_has_setup = ex .AND. ierr == 0
+  END FUNCTION dump_h5_has_setup
+  !
+  SUBROUTINE dump_h5_read_setup_head(ihs, rhs)
+    INTEGER, INTENT(OUT) :: ihs(3)
+    REAL(dp), INTENT(OUT) :: rhs(3)
+    TYPE(qeh5_file) :: g
+    CALL qeh5_open_group(hf, 'setup', g)
+    CALL qeh5_read_attribute(g%id, 'lmaxkb', ihs(1)); CALL qeh5_read_attribute(g%id, 'nbetam', ihs(2))
+    CALL qeh5_read_attribute(g%id, 'nqx', ihs(3))
+    CALL qeh5_read_attribute(g%id, 'ecutwfc', rhs(1)); CALL qeh5_read_attribute(g%id, 'tpiba', rhs(2))
+    CALL qeh5_read_attribute(g%id, 'dq', rhs(3))
+    CALL qeh5_close(g)
+  END SUBROUTINE dump_h5_read_setup_head
+  SUBROUTINE dump_h5_read_setup(tau, mill, tab, indv, nhtol, nhtolm)
+    INTEGER, INTENT(OUT) :: mill(:,:), indv(:,:), nhtol(:,:), nhtolm(:,:)
+    REAL(dp), INTENT(OUT) :: tau(:,:), tab(:,:,:)
+    TYPE(qeh5_file) :: g
+    CALL qeh5_open_group(hf, 'setup', g)
+    CALL get(g, 'tau', tau); CALL get(g, 'mill', mill); CALL get(g, 'tab', tab)
+    CALL get(g, 'indv', indv); CALL get(g, 'nhtol', nhtol); CALL get(g, 'nhtolm', nhtolm)
+    CALL qeh5_close(g)
+  END SUBROUTINE dump_h5_read_setup
   !
   SUBROUTINE dump_h5_write_k(ik, npw, nbnd, nkb, igk, g2kin, h_diag, s_diag, vkb, et, evc, hpsi, spsi, hnl)
     INTEGER, INTENT(IN) :: ik, npw, nbnd, nkb
@@ -161,6 +207,52 @@ CONTAINS
     CALL qeh5_write_dataset(t, d)
     CALL qeh5_close(d)
   END SUBROUTINE put_i1
+  SUBROUTINE put_i2(f, name, a)
+    TYPE(qeh5_file), INTENT(IN) :: f
+    CHARACTER(LEN=*), INTENT(IN) :: name
+    INTEGER, INTENT(IN) :: a(:,:)
+    INTEGER, ALLOCATABLE :: t(:,:)
+    TYPE(qeh5_dataset) :: d
+    t = a
+    CALL qeh5_set_space(d, t(1,1), 2, SHAPE(t))
+    CALL qeh5_open_dataset(f, d, action='write', name=name)
+    CALL qeh5_write_dataset(t, d)
+    CALL qeh5_close(d)
+  END SUBROUTINE put_i2
+  SUBROUTINE get_i2(f, name, a)
+    TYPE(qeh5_file), INTENT(IN) :: f
+    CHARACTER(LEN=*), INTENT(IN) :: name
+    INTEGER, INTENT(OUT) :: a(:,:)
+    INTEGER, ALLOCATABLE :: t(:,:)
+    TYPE(qeh5_dataset) :: d
+    ALLOCATE(t(SIZE(a,1),SIZE(a,2)))
+    CALL qeh5_open_dataset(f, d, action='read', name=name)
+    CALL qeh5_read_dataset(t, d)
+    CALL qeh5_close(d); a = t
+  END SUBROUTINE get_i2
+  SUBROUTINE put_i3(f, name, a)
+    TYPE(qeh5_file), INTENT(IN) :: f
+    CHARACTER(LEN=*), INTENT(IN) :: name
+    INTEGER, INTENT(IN) :: a(:,:,:)
+    INTEGER, ALLOCATABLE :: t(:,:,:)
+    TYPE(qeh5_dataset) :: d
+    t = a
+    CALL qeh5_set_space(d, t(1,1,1), 3, SHAPE(t))
+    CALL qeh5_open_dataset(f, d, action='write', name=name)
+    CALL qeh5_write_dataset(t, d)
+    CALL qeh5_close(d)
+  END SUBROUTINE put_i3
+  SUBROUTINE get_i3(f, name, a)
+    TYPE(qeh5_file), INTENT(IN) :: f
+    CHARACTER(LEN=*), INTENT(IN) :: name
+    INTEGER, INTENT(OUT) :: a(:,:,:)
+    INTEGER, ALLOCATABLE :: t(:,:,:)
+    TYPE(qeh5_dataset) :: d
+    ALLOCATE(t(SIZE(a,1),SIZE(a,2),SIZE(a,3)))
+    CALL qeh5_open_dataset(f, d, action='read', name=name)
+    CALL qeh5_read_dataset(t, d)
+    CALL qeh5_close(d); a = t
+  END SUBROUTINE get_i3
   SUBROUTINE put_r1(f, name, a)
     TYPE(qeh5_file), INTENT(IN) :: f
     CHARACTER(LEN=*), INTENT(IN) :: name

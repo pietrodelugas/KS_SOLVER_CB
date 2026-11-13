@@ -15,10 +15,17 @@ MODULE qe_ham_module
   REAL(dp), PUBLIC :: v_of_0, omega, alat, at(3,3), bg(3,3)
   INTEGER, ALLOCATABLE, PUBLIC :: nl(:), ityp(:), nh(:), ofsbeta(:), isk(:), ngk(:)
   REAL(dp), ALLOCATABLE, PUBLIC :: vrs(:,:), deeq(:,:,:,:), qq_at(:,:,:), xk(:,:), wk(:)
+  ! data to rebuild the k dependent part for arbitrary k-points (dumper v2, 'setup'); has_setup = .FALSE. if not in the dump
+  LOGICAL, PUBLIC :: has_setup = .FALSE.
+  INTEGER, PUBLIC :: lmaxkb, nbetam, nqx
+  REAL(dp), PUBLIC :: ecutwfc, tpiba, dq_tab
+  INTEGER, ALLOCATABLE, PUBLIC :: mill(:,:), indv(:,:), nhtol(:,:), nhtolm(:,:)
+  REAL(dp), ALLOCATABLE, PUBLIC :: tau(:,:), tab(:,:,:)
   LOGICAL, PUBLIC :: dump_has_tests = .TRUE.   ! test vectors (evc, hpsi, spsi, hnl) present in ham_k.bin
   INTEGER(8), ALLOCATABLE :: koffset(:)         ! first byte of each k-point block
   INTEGER :: iun_k = -1
   LOGICAL, PUBLIC :: use_h5 = .FALSE.                  ! the dump is ham.h5 (HDF5) instead of the stream files
+  PUBLIC :: qe_read_setup_bin, qe_read_setup_h5
   PUBLIC :: qe_read_global, qe_open_k, qe_read_k, qe_close_k
 CONTAINS
   SUBROUTINE qe_read_global(dumpdir)
@@ -57,6 +64,7 @@ CONTAINS
        koffset(ik) = pos; pos = pos + block_size(ngk(ik), dump_has_tests)
     END DO
     koffset(nkstot+1) = pos
+    CALL qe_read_setup_bin(TRIM(dumpdir))
   END SUBROUTINE qe_read_global
   !
   SUBROUTINE qe_read_global_h5(fname)
@@ -74,10 +82,42 @@ CONTAINS
     ALLOCATE(xk(3,nkstot), wk(nkstot), isk(nkstot), ngk(nkstot))
     CALL dump_h5_read_global(nl, vrs, ityp, nh, ofsbeta, deeq, qq_at, xk, wk, isk, ngk)
     npwx = MAXVAL(ngk)
+    CALL qe_read_setup_h5()
 #else
     STOP 'qe_read_global_h5: this build has no HDF5 (QE_ENABLE_HDF5=OFF)'
 #endif
   END SUBROUTINE qe_read_global_h5
+  !
+  SUBROUTINE qe_read_setup_bin(dumpdir)
+    CHARACTER(LEN=*), INTENT(IN) :: dumpdir
+    INTEGER :: iun, magic
+    LOGICAL :: ex
+    INQUIRE(FILE=TRIM(dumpdir)//'/ham_setup.bin', EXIST=ex)
+    IF (.NOT. ex) RETURN
+    OPEN(NEWUNIT=iun, FILE=TRIM(dumpdir)//'/ham_setup.bin', FORM='unformatted', ACCESS='stream', STATUS='old', ACTION='read')
+    READ(iun) magic, lmaxkb, nbetam, nqx
+    IF (magic /= 20251114) STOP 'qe_read_setup_bin: wrong magic number'
+    READ(iun) ecutwfc, tpiba, dq_tab
+    ALLOCATE(tau(3,nat), mill(3,ngms), tab(nqx,nbetam,nsp), indv(nhm,nsp), nhtol(nhm,nsp), nhtolm(nhm,nsp))
+    READ(iun) tau
+    READ(iun) mill
+    READ(iun) tab
+    READ(iun) indv, nhtol, nhtolm
+    CLOSE(iun)
+    has_setup = .TRUE.
+  END SUBROUTINE qe_read_setup_bin
+  SUBROUTINE qe_read_setup_h5()
+#if defined(__HDF5)
+    INTEGER :: ihs(3)
+    REAL(dp) :: rhs(3)
+    IF (.NOT. dump_h5_has_setup()) RETURN
+    CALL dump_h5_read_setup_head(ihs, rhs)
+    lmaxkb = ihs(1); nbetam = ihs(2); nqx = ihs(3); ecutwfc = rhs(1); tpiba = rhs(2); dq_tab = rhs(3)
+    ALLOCATE(tau(3,nat), mill(3,ngms), tab(nqx,nbetam,nsp), indv(nhm,nsp), nhtol(nhm,nsp), nhtolm(nhm,nsp))
+    CALL dump_h5_read_setup(tau, mill, tab, indv, nhtol, nhtolm)
+    has_setup = .TRUE.
+#endif
+  END SUBROUTINE qe_read_setup_h5
   !
   INTEGER(8) FUNCTION block_size(npw, tests)
     INTEGER, INTENT(IN) :: npw

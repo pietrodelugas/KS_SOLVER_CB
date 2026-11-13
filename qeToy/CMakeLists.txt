@@ -1,6 +1,7 @@
 set(src_qe_lib
 	qe_lib/qe_dump_h5.f90
 	qe_lib/qe_ham_module.f90
+	qe_lib/qe_kpoint_module.f90
 	qe_lib/qe_batch_module.f90
 	qe_operators/qe_h_psi_batched_iter.f90
 	qe_operators/qe_s_psi_g_psi_batched.f90)
@@ -33,3 +34,7 @@ if(QE_ENABLE_HDF5)
     set_target_properties(dump_to_h5 PROPERTIES OUTPUT_NAME dump_to_h5.x)
     target_link_libraries(dump_to_h5 PRIVATE qe_toy_lib)
 endif()
+
+qe_add_executable(qe_kpoint_test qe_kpoint_test.f90)
+set_target_properties(qe_kpoint_test PROPERTIES OUTPUT_NAME qe_kpoint_test.x)
+target_link_libraries(qe_kpoint_test PRIVATE qe_toy_lib)
