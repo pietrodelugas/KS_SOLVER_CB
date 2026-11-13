@@ -18,7 +18,7 @@ subroutine qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   !! A term that needs the same (slot, band) columns (e.g. a non local part built from becp) can reuse this layout.
   use iso_fortran_env, only: dp=> real64
   use qe_batch_module, only: g2kin_batched, igk_batched, spin_batched, dfft, fft_array_batched, fft_cols_eff, &
-                             vkb_batched, becp_batched, ps_batched, kb2atom, kb2ih
+                             vkb_batched, becp_batched, ps_batched, kb2atom, kb2ih, nonlocal_batched
   use qe_ham_module, only: nl, vrs, nkb, deeq, nh, ityp, ofsbeta
   use laxlib_cusolver_handles, only: cublas_handle
   use qe_batch_module, only: qe_cublas_prepare
@@ -128,7 +128,10 @@ subroutine qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
 
   ! Non local part  hpsi += vkb D vkb^H psi, one GEMM pair per active slot on the stream of this thread:
   ! becp = vkb^H psi_new ; ps = D becp (kernel) ; hpsi_new += vkb ps
-  if (nkb > 0) then
+  if (nkb > 0 .and. nonlocal_batched) then
+     call qe_cublas_prepare(i_batch)
+     call qe_nonlocal_hpsi_batched(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi, hpsi, i_batch, nk_batches, slot2batch)
+  else if (nkb > 0) then
      call qe_cublas_prepare(i_batch)
      do ik = 1, nk_batches
         m = nbnd_comp(ik); if (m <= 0) cycle
@@ -158,3 +161,69 @@ subroutine qe_h_psi_batched_iter(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi
   !$acc end data
 
 end subroutine qe_h_psi_batched_iter
+
+subroutine qe_nonlocal_hpsi_batched(npwx, npw_comp, nbndx, nbnd_comp, nb1_comp, psi, hpsi, i_batch, ns, slot2batch)
+  !! Non local part  hpsi_new += vkb D vkb^H psi_new  of all the active slots with two batched GEMMs (cublasZgemmBatched):
+  !!      becp(slot) = vkb(batch)^H psi(:, window)       ps(slot) = D becp (kernel)       hpsi(:, window) += vkb(batch) ps(slot)
+  !! All slots use the same sizes (neutral padding): K = npwx (the rows beyond npw of vkb are zero, so rows beyond npw
+  !! of psi do not matter and nothing is added to the rows of hpsi beyond npw) and mm = max number of new columns.
+  !! The window of mm columns of a slot starts at c0 = min(nb1, nbndx-mm+1), so it stays inside psi and covers the
+  !! new columns [nb1, nb1+m-1]; ps is set to zero for the window columns outside the new ones, which are therefore
+  !! left untouched by the second GEMM. npw_comp, nb1_comp and slot2batch must be valid on the host.
+  use iso_fortran_env, only: dp => real64
+  use qe_batch_module, only: vkb_batched, becp_batched, ps_batched, spin_batched, kb2atom, kb2ih, &
+                             ptr_vkb, ptr_psi_w, ptr_becp, ptr_ps, ptr_hpsi_w
+  use qe_ham_module, only: nkb, deeq, nh, ityp, ofsbeta
+  use laxlib_cusolver_handles, only: cublas_handle
+  use mytime, only: clock_thread
+  use openacc, only: acc_deviceptr
+  use cublas
+  implicit none
+  integer, intent(in) :: npwx, nbndx, i_batch, ns
+  integer, intent(in) :: npw_comp(ns), nbnd_comp(ns), nb1_comp(ns), slot2batch(ns)
+  complex(dp) :: psi(npwx, nbndx, ns), hpsi(npwx, nbndx, ns)
+  integer :: s, b, mm, ic, ikb, jh, na, nt, ofs, spin, col, info
+  integer :: c0(ns), nb1(ns), m(ns), bt(ns)
+  complex(dp) :: acc
+
+  mm = maxval(nbnd_comp(1:ns))
+  if (mm <= 0) return
+  do s = 1, ns
+     m(s) = nbnd_comp(s); nb1(s) = nb1_comp(s); bt(s) = slot2batch(s)
+     c0(s) = min(nb1(s), nbndx - mm + 1)
+     ptr_vkb(s)    = acc_deviceptr(vkb_batched(1,1,bt(s)))
+     ptr_psi_w(s)  = acc_deviceptr(psi(1,c0(s),s))
+     ptr_becp(s)   = acc_deviceptr(becp_batched(1,1,s))
+     ptr_ps(s)     = acc_deviceptr(ps_batched(1,1,s))
+     ptr_hpsi_w(s) = acc_deviceptr(hpsi(1,c0(s),s))
+  end do
+  !$acc update device(ptr_vkb(1:ns), ptr_psi_w(1:ns), ptr_becp(1:ns), ptr_ps(1:ns), ptr_hpsi_w(1:ns))
+
+  !$acc host_data use_device(ptr_vkb, ptr_psi_w, ptr_becp)
+  info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_C, CUBLAS_OP_N, nkb, mm, npwx, (1._dp,0._dp), &
+                            ptr_vkb, npwx, ptr_psi_w, npwx, (0._dp,0._dp), ptr_becp, nkb, ns)
+  !$acc end host_data
+
+  !$acc parallel loop collapse(3) async(clock_thread) copyin(c0, nb1, m, bt) present(ps_batched, becp_batched, deeq, nh, ityp, ofsbeta, kb2atom, kb2ih, spin_batched) private(na, nt, ofs, spin, col, acc, jh)
+  do s = 1, ns
+     do ic = 1, mm
+        do ikb = 1, nkb
+           col = c0(s) + ic - 1
+           acc = (0._dp,0._dp)
+           if (col >= nb1(s) .and. col <= nb1(s) + m(s) - 1) then
+              na = kb2atom(ikb); nt = ityp(na); ofs = ofsbeta(na); spin = spin_batched(bt(s))
+              do jh = 1, nh(nt)
+                 acc = acc + deeq(kb2ih(ikb),jh,na,spin) * becp_batched(ofs+jh,ic,s)
+              end do
+           end if
+           ps_batched(ikb,ic,s) = acc
+        end do
+     end do
+  end do
+
+  !$acc host_data use_device(ptr_vkb, ptr_ps, ptr_hpsi_w)
+  info = cublasZgemmBatched(cublas_handle(i_batch), CUBLAS_OP_N, CUBLAS_OP_N, npwx, mm, nkb, (1._dp,0._dp), &
+                            ptr_vkb, npwx, ptr_ps, nkb, (1._dp,0._dp), ptr_hpsi_w, npwx, ns)
+  !$acc end host_data
+  !$acc wait(clock_thread)
+end subroutine qe_nonlocal_hpsi_batched

@@ -17,7 +17,7 @@ PROGRAM qe_davidson_main
   CHARACTER(LEN=256) :: dumpdir, out
   INTEGER :: nk_batches, david, fft_cols_max, nks_max
   REAL(dp) :: ethr
-  NAMELIST /qe/ dumpdir, nk_batches, david, ethr, fft_cols_max, nks_max, out, start_from_dump
+  NAMELIST /qe/ dumpdir, nk_batches, david, ethr, fft_cols_max, nks_max, out, start_from_dump, nonlocal_batched
   COMPLEX(dp), ALLOCATABLE :: evc_batched(:,:,:)
   REAL(dp), ALLOCATABLE :: eig_batched(:,:), eig_all(:,:), eig_new_comp(:,:), ew_old_comp(:,:), ew_c(:,:), ew_comp_itr(:,:)
   INTEGER, ALLOCATABLE :: btype(:), notcnv_batched(:), dav_iter_batched(:), nhpsi_batched(:), conv_comp(:,:)

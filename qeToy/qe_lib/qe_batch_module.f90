@@ -5,6 +5,7 @@
 MODULE qe_batch_module
   USE qe_ham_module
   USE fft_types, ONLY : fft_type_descriptor
+  USE openacc, ONLY : c_devptr
   IMPLICIT NONE
   INTEGER, PARAMETER :: dp = KIND(1.d0)
   TYPE(fft_type_descriptor) :: dfft                       ! only the grid dimensions are set (full 3-D FFT, 'Rho' kind)
@@ -15,6 +16,8 @@ MODULE qe_batch_module
   COMPLEX(dp), ALLOCATABLE :: vkb_batched(:,:,:), fft_array_batched(:,:)
   COMPLEX(dp), ALLOCATABLE :: becp_batched(:,:,:), ps_batched(:,:,:)   ! non local work arrays of H|psi> (indexed by slot)
   COMPLEX(dp), ALLOCATABLE :: becp_s(:,:,:), ps_s(:,:,:)               ! the same for S|psi> (indexed by batch/thread)
+  LOGICAL :: nonlocal_batched = .TRUE.                                 ! one batched GEMM pair for all the slots (else a GEMM pair per slot)
+  TYPE(c_devptr), ALLOCATABLE :: ptr_vkb(:), ptr_psi_w(:), ptr_becp(:), ptr_ps(:), ptr_hpsi_w(:)   ! pointer arrays of the batched GEMMs (device)
   INTEGER, ALLOCATABLE :: kb2atom(:), kb2ih(:)                          ! atom and projector index within the atom of every vkb column
 CONTAINS
   SUBROUTINE qe_setup_grid()
@@ -35,6 +38,8 @@ CONTAINS
     ALLOCATE(vkb_batched(npwx,MAX(nkb,1),nb), fft_array_batched(nnr,cols))
     ALLOCATE(becp_batched(MAX(nkb,1),nbndx,nb), ps_batched(MAX(nkb,1),nbndx,nb), becp_s(MAX(nkb,1),nbndx,nb), ps_s(MAX(nkb,1),nbndx,nb))
     ALLOCATE(kb2atom(MAX(nkb,1)), kb2ih(MAX(nkb,1))); kb2atom = 1; kb2ih = 1
+    ALLOCATE(ptr_vkb(nb), ptr_psi_w(nb), ptr_becp(nb), ptr_ps(nb), ptr_hpsi_w(nb))
+    !$acc enter data create(ptr_vkb, ptr_psi_w, ptr_becp, ptr_ps, ptr_hpsi_w)
     DO na = 1, nat; DO ih = 1, nh(ityp(na))
        kb2atom(ofsbeta(na)+ih) = na; kb2ih(ofsbeta(na)+ih) = ih
     END DO; END DO
