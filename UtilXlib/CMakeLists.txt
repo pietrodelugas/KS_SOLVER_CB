@@ -19,8 +19,14 @@ set(src_util
     set_mpi_comm_4_solvers.f90
     # GPU
     mp_base_gpu.f90)
+if(QE_ENABLE_HDF5)
+    list(APPEND src_util qeh5_module.f90)
+endif()
 qe_enable_cuda_fortran("${src_util}")
 qe_add_library(qe_utilx ${src_util})
+if(QE_ENABLE_HDF5)
+    target_link_libraries(qe_utilx PUBLIC qe_hdf5_fortran)
+endif()
 
 set(src_util_c
     cptimer.c

@@ -3,6 +3,9 @@
 ! No QE code is used. ham_k.bin is read by random access: the byte offset of every k-point block follows from ngk.
 !
 MODULE qe_ham_module
+#if defined(__HDF5)
+  USE qe_dump_h5
+#endif
   IMPLICIT NONE
   PRIVATE
   INTEGER, PARAMETER :: dp = KIND(1.d0)
@@ -15,12 +18,19 @@ MODULE qe_ham_module
   LOGICAL, PUBLIC :: dump_has_tests = .TRUE.   ! test vectors (evc, hpsi, spsi, hnl) present in ham_k.bin
   INTEGER(8), ALLOCATABLE :: koffset(:)         ! first byte of each k-point block
   INTEGER :: iun_k = -1
+  LOGICAL, PUBLIC :: use_h5 = .FALSE.                  ! the dump is ham.h5 (HDF5) instead of the stream files
   PUBLIC :: qe_read_global, qe_open_k, qe_read_k, qe_close_k
 CONTAINS
   SUBROUTINE qe_read_global(dumpdir)
     CHARACTER(LEN=*), INTENT(IN) :: dumpdir
     INTEGER :: iun, magic, ok, dbl, ik
     INTEGER(8) :: pos, sz
+    LOGICAL :: ex
+    INQUIRE(FILE=TRIM(dumpdir)//'/ham.h5', EXIST=ex)
+    IF (ex) THEN
+       CALL qe_read_global_h5(TRIM(dumpdir)//'/ham.h5')
+       RETURN
+    END IF
     OPEN(NEWUNIT=iun, FILE=TRIM(dumpdir)//'/ham_global.bin', FORM='unformatted', ACCESS='stream', STATUS='old')
     READ(iun) magic, nspin, nkstot, nbnd, npwx, nkb, nat, nsp, nhm, nr1, nr2, nr3, nr1x, nr2x, nr3x, nnr, ngms, ok, dbl
     IF (magic /= magic_number) STOP 'qe_read_global: wrong magic number'
@@ -49,6 +59,26 @@ CONTAINS
     koffset(nkstot+1) = pos
   END SUBROUTINE qe_read_global
   !
+  SUBROUTINE qe_read_global_h5(fname)
+    CHARACTER(LEN=*), INTENT(IN) :: fname
+#if defined(__HDF5)
+    INTEGER :: ih(nihead), ht
+    use_h5 = .TRUE.
+    CALL dump_h5_open_read(fname)
+    CALL dump_h5_read_head(ih, ht, v_of_0, omega, alat, at, bg)
+    IF (ih(1) /= magic_number) STOP 'qe_read_global_h5: wrong magic number'
+    nspin = ih(2); nkstot = ih(3); nbnd = ih(4); npwx = ih(5); nkb = ih(6); nat = ih(7); nsp = ih(8); nhm = ih(9)
+    nr1 = ih(10); nr2 = ih(11); nr3 = ih(12); nr1x = ih(13); nr2x = ih(14); nr3x = ih(15); nnr = ih(16); ngms = ih(17)
+    okvan = ih(18) /= 0; doublegrid = ih(19) /= 0; dump_has_tests = ht /= 0
+    ALLOCATE(nl(ngms), vrs(nnr,nspin), ityp(nat), nh(nsp), ofsbeta(nat), deeq(nhm,nhm,nat,nspin), qq_at(nhm,nhm,nat))
+    ALLOCATE(xk(3,nkstot), wk(nkstot), isk(nkstot), ngk(nkstot))
+    CALL dump_h5_read_global(nl, vrs, ityp, nh, ofsbeta, deeq, qq_at, xk, wk, isk, ngk)
+    npwx = MAXVAL(ngk)
+#else
+    STOP 'qe_read_global_h5: this build has no HDF5 (QE_ENABLE_HDF5=OFF)'
+#endif
+  END SUBROUTINE qe_read_global_h5
+  !
   INTEGER(8) FUNCTION block_size(npw, tests)
     INTEGER, INTENT(IN) :: npw
     LOGICAL, INTENT(IN) :: tests
@@ -66,10 +96,14 @@ CONTAINS
   !
   SUBROUTINE qe_open_k(dumpdir)
     CHARACTER(LEN=*), INTENT(IN) :: dumpdir
+    IF (use_h5) RETURN       ! ham.h5 stays open since qe_read_global
     OPEN(NEWUNIT=iun_k, FILE=TRIM(dumpdir)//'/ham_k.bin', FORM='unformatted', ACCESS='stream', STATUS='old', ACTION='read')
   END SUBROUTINE qe_open_k
   SUBROUTINE qe_close_k()
     IF (iun_k >= 0) CLOSE(iun_k); iun_k = -1
+#if defined(__HDF5)
+    IF (use_h5) THEN; CALL dump_h5_close(); use_h5 = .FALSE.; END IF
+#endif
   END SUBROUTINE qe_close_k
   !
   ! Reads the block of k-point ik. Arrays must have first dimension >= ngk(ik); optional ones are the test vectors.
@@ -81,6 +115,17 @@ CONTAINS
     COMPLEX(dp), INTENT(OUT), OPTIONAL :: evc(:,:), hpsi(:,:), spsi(:,:), hnl(:,:)
     INTEGER :: ikr, npw, npw_file
     npw = ngk(ik)
+#if defined(__HDF5)
+    IF (use_h5) THEN
+       IF (PRESENT(evc)) THEN
+          IF (.NOT. dump_has_tests) STOP 'qe_read_k: test vectors requested but not in the dump'
+          CALL dump_h5_read_k(ik, npw, nbnd, nkb, igk, g2kin, h_diag, s_diag, vkb, et, evc, hpsi, spsi, hnl)
+       ELSE
+          CALL dump_h5_read_k(ik, npw, nbnd, nkb, igk, g2kin, h_diag, s_diag, vkb, et)
+       END IF
+       RETURN
+    END IF
+#endif
     READ(iun_k, POS=koffset(ik)) ikr, npw_file
     IF (ikr /= ik .OR. npw_file /= npw) STOP 'qe_read_k: k-point block mismatch'
     READ(iun_k) igk(1:npw)

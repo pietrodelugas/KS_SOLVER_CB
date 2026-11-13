@@ -539,9 +539,13 @@ if(QE_ENABLE_HDF5)
         message(STATUS "Parallel HDF5 enabled!")
     endif()
 
+    # a static HDF5 needs zlib (and libdl, libm) at link time
+    find_package(ZLIB)
     target_link_libraries(qe_hdf5_fortran
         INTERFACE
-            ${HDF5_Fortran_LIBRARIES})
+            ${HDF5_Fortran_LIBRARIES}
+            $<$<BOOL:${ZLIB_FOUND}>:${ZLIB_LIBRARIES}>
+            ${CMAKE_DL_LIBS})
     target_include_directories(qe_hdf5_fortran
         INTERFACE
             ${HDF5_Fortran_INCLUDE_DIRS})
