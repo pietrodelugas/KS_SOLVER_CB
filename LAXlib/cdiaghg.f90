@@ -884,7 +884,7 @@ IF (info /= 0) CALL lax_error__(' cdiaghg_gpu ', 'sync after triang right', ABS(
       info = cusolverDnXsyevBatched(cuSolverHandle, syev_params, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_UPPER, &
                                     n_64, CUDA_C_64F, transfer(c_devloc(h_d), c_null_ptr), ldh_64, CUDA_R_64F, &
                                     transfer(c_devloc(e_d), c_null_ptr), CUDA_C_64F, &
-                                    c_devloc(DeviceBuffer), device_workspace_bytes, c_loc(HostBuffer), host_workspace_bytes, c_loc(d_info), n_k_64)
+                                    c_devloc(DeviceBuffer), device_workspace_bytes, c_loc(HostBuffer), host_workspace_bytes, c_devloc(d_info), n_k_64)
 
       CALL stop_clock_gpu( 'XsyevBatched:' )
 
