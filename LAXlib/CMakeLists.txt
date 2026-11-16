@@ -1,3 +1,12 @@
+option(QE_CDIAGHG_LEONARDO_FALLBACK
+    "Use the cusolverDnZheevjBatched-based GPU batched eigensolver (cdiaghg_leonardo.f90) instead of the cusolverDnXsyevBatched one (cdiaghg.f90). Needed where the CUDA driver is too old for cusolverDnXsyevBatched (e.g. driver 12.2 on Leonardo)."
+    OFF)
+if(QE_CDIAGHG_LEONARDO_FALLBACK)
+    set(cdiaghg_src cdiaghg_leonardo.f90)
+else()
+    set(cdiaghg_src cdiaghg.f90)
+endif()
+
 set(src_lax
     distools.f90
     dspev_drv.f90
@@ -10,7 +19,7 @@ set(src_lax
     rdiaghg.f90
     transto.f90
     zhpev_drv.f90
-    cdiaghg.f90
+    ${cdiaghg_src}
     laxlib_cusolver_handle_mod.f90
     module_interface_cusolverDnXsyevBatched.f90)
 qe_enable_cuda_fortran("${src_lax}")
