@@ -66,7 +66,7 @@ module cusolverxsyevbatched
             integer(c_size_t) :: workspaceInBytesOnDevice
             type(c_ptr), value :: workspaceOnHost
             integer(c_size_t) :: workspaceInBytesOnHost
-            integer :: infoArray
+            type(c_devptr), value :: infoArray
             integer(int64), value :: batchSize
         end function
 
