@@ -1070,6 +1070,7 @@ END DO
       
       
       
+      info = cudaStreamSynchronize(laxlib_cuda_stream)
 #if ! defined(__USE_GLOBAL_BUFFER)
       !DEALLOCATE(work_d)
       DEALLOCATE(HostBuffer, DeviceBuffer)
