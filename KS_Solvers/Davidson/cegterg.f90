@@ -99,8 +99,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   INTEGER, ALLOCATABLE :: src_idx(:,:) ! unconverged roots, in order, for the reordering of vc (host and device copy)
   INTEGER, ALLOCATABLE :: par(:,:)
     ! per k-point integer parameters, host and device copy, updated with one transfer: the kernels that run over all the
-    ! k-points of the group in one launch read them (1 nbase, 2 nb1, 3 notcnv, 4 npw, 5 active = not converged yet)
-  INTEGER, PARAMETER :: ip_nbase = 1, ip_nb1 = 2, ip_notcnv = 3, ip_npw = 4, ip_act = 5
+    ! k-points of the group in one launch read them (1 nbase, 2 nb1, 3 notcnv, 4 npw, 5 active = not converged yet, 6 restart now)
+  INTEGER, PARAMETER :: ip_nbase = 1, ip_nb1 = 2, ip_notcnv = 3, ip_npw = 4, ip_act = 5, ip_rst = 6
   INTEGER :: ibb, jj, kk, ii, ntail, jmax
   INTEGER :: nb_slot_max, col
   REAL(DP) :: thr_conv
@@ -204,7 +204,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   ALLOCATE( ew( nvecx, n_k ), STAT=ierr )
   IF( ierr /= 0 ) CALL errore( ' cegterg ',' cannot allocate ew ', ABS(ierr) )
   !$acc enter data create(ew) async(async_id)
-  ALLOCATE( par(5,n_k), src_idx(nvec,n_k) )
+  ALLOCATE( par(6,n_k), src_idx(nvec,n_k) )
   par = 0
   src_idx = 0
   !$acc enter data create(par, src_idx) async(async_id)
@@ -820,64 +820,84 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         EXIT iterate
      END IF
      !
+     ! ... refresh psi, H*psi and S*psi of the k-points that restart. The copies and the reset of the reduced matrices are
+     ! ... kernels over all of them; the products stay one per k-point (library calls). The order of the operations
+     ! ... of one k-point is the same as before.
+     n_active = 0
      DO ib = 1, n_k
+        par(ip_rst,ib) = 0
         IF ( my_done(ib) ) CYCLE
         IF ( restart_now(ib) ) THEN
-           !
-           ! ... refresh psi, H*psi and S*psi
-           !
-           !$acc parallel loop collapse(2) async(async_id) present(psi, evc)
+           par(ip_rst,ib) = 1
+           n_active = n_active + 1
+        END IF
+     END DO
+     IF ( n_active > 0 ) THEN
+        !$acc update device(par)
+        !$acc parallel loop collapse(3) async(async_id) present(psi, evc, par)
+        DO ib = 1, n_k
            DO j = 1, nvec
               DO k = 1, npwx*npol
-                 psi(k,j,ib) = evc(k,j,ib)
+                 IF ( par(ip_rst,ib) == 1 ) psi(k,j,ib) = evc(k,j,ib)
               END DO
            END DO
-           !
-           IF ( uspp ) THEN
+        END DO
+        !
+        IF ( uspp ) THEN
+           DO ib = 1, n_k
+              IF ( par(ip_rst,ib) == 0 ) CYCLE
               !$acc host_data use_device(psi, spsi, vc)
               CALL MYZGEMM_H( cublas_handle(async_id), 'N','N', kdim(ib), nvec, my_n(ib), ONE, spsi(1,1,ib), kdmx, &
                               vc(1,1,ib), nvecx, ZERO, psi(1,nvec+1,ib), kdmx )
               !$acc end host_data
-              !$acc parallel loop collapse(2) async(async_id) present(psi, spsi)
+           END DO
+           !$acc parallel loop collapse(3) async(async_id) present(psi, spsi, par)
+           DO ib = 1, n_k
               DO j = 1, nvec
                  DO k = 1, npwx*npol
-                    spsi(k,j,ib) = psi(k,nvec+j,ib)
+                    IF ( par(ip_rst,ib) == 1 ) spsi(k,j,ib) = psi(k,nvec+j,ib)
                  END DO
               END DO
-           END IF
-           !
+           END DO
+        END IF
+        !
+        DO ib = 1, n_k
+           IF ( par(ip_rst,ib) == 0 ) CYCLE
            !$acc host_data use_device(psi, hpsi, vc)
            CALL MYZGEMM_H( cublas_handle(async_id), 'N','N', kdim(ib), nvec, my_n(ib), ONE, hpsi(1,1,ib), kdmx, &
                            vc(1,1,ib), nvecx, ZERO, psi(1,nvec+1,ib), kdmx )
            !$acc end host_data
-           !$acc parallel loop collapse(2) async(async_id) present(psi, hpsi)
+           nbase(ib) = nvec
+        END DO
+        !$acc parallel loop collapse(3) async(async_id) present(psi, hpsi, par)
+        DO ib = 1, n_k
            DO j = 1, nvec
               DO k = 1, npwx*npol
-                 hpsi(k,j,ib) = psi(k,nvec+j,ib)
+                 IF ( par(ip_rst,ib) == 1 ) hpsi(k,j,ib) = psi(k,nvec+j,ib)
               END DO
            END DO
-           !
-           ! ... refresh the reduced hamiltonian
-           !
-           nbase(ib) = nvec
-           !
-           !$acc kernels async(async_id)
-           DO n = 1, nbase(ib)
-              hc(n,n,ib) = CMPLX( e(n,ib), 0.0_DP ,kind=DP)
-              sc(n,n,ib) = ONE
-              vc(n,n,ib) = ONE
-              DO j = n+1, nbase(ib)
-                 hc(j,n,ib) = ZERO
-                 hc(n,j,ib) = ZERO
-                 sc(j,n,ib) = ZERO
-                 sc(n,j,ib) = ZERO
-                 vc(j,n,ib) = ZERO
-                 vc(n,j,ib) = ZERO
+        END DO
+        !
+        ! ... refresh the reduced hamiltonian: diagonal hc = e, sc = vc = 1, zero elsewhere in the nvec x nvec block
+        !$acc parallel loop collapse(3) async(async_id) present(hc, sc, vc, e, par)
+        DO ib = 1, n_k
+           DO n = 1, nvec
+              DO j = 1, nvec
+                 IF ( par(ip_rst,ib) == 1 ) THEN
+                    IF ( j == n ) THEN
+                       hc(n,n,ib) = CMPLX( e(n,ib), 0.0_DP ,kind=DP)
+                       sc(n,n,ib) = ONE
+                       vc(n,n,ib) = ONE
+                    ELSE
+                       hc(j,n,ib) = ZERO
+                       sc(j,n,ib) = ZERO
+                       vc(j,n,ib) = ZERO
+                    END IF
+                 END IF
               END DO
            END DO
-           !$acc end kernels
-        END IF
-     END DO
+        END DO
+     END IF
      CALL stop_clock( 'cegterg:last' )
      !
   END DO iterate
