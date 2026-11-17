@@ -708,29 +708,29 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         prev_nbase_max = nbase_max
         prev_n_active  = n_active
      END IF
-     DO ib = 1, n_k
-        IF ( my_done(ib) .OR. done_comp(ib) ) CYCLE
-        my_slot = 1 + COUNT(.NOT. done_comp(1:ib-1))
-        ! hc_comp_itr / sc_comp_itr of this slot, nbase_max x nbase_max, in one kernel:
-        !  - the nbase x nbase block is copied from hc / sc
-        !  - the padding (rows and columns beyond nbase) is zero, except for the diagonal,
-        !    where sc = 1 and hc = i*1e3 so that the padded eigenpairs are decoupled and sorted last
-        !$acc parallel loop collapse(2) async(async_id)
-        DO j = 1, nbase_max
-           DO i = 1, nbase_max
-              IF ( i <= nbase(ib) .AND. j <= nbase(ib) ) THEN
-                 hc_comp_itr(i,j,my_slot) = hc(i,j,ib)
-                 sc_comp_itr(i,j,my_slot) = sc(i,j,ib)
-              ELSE IF ( i == j ) THEN
-                 hc_comp_itr(i,j,my_slot) = CMPLX( REAL(i,DP)*1.D3, 0.D0, kind=DP )
-                 sc_comp_itr(i,j,my_slot) = CMPLX( 1.D0, 0.D0, kind=DP )
-              ELSE
-                 hc_comp_itr(i,j,my_slot) = CMPLX( 0.D0, 0.D0, kind=DP )
-                 sc_comp_itr(i,j,my_slot) = CMPLX( 0.D0, 0.D0, kind=DP )
-              END IF
+     ! hc_comp_itr / sc_comp_itr of every slot, nbase_max x nbase_max, in one kernel:
+     !  - the nbase x nbase block is copied from hc / sc
+     !  - the padding (rows and columns beyond nbase) is zero, except for the diagonal,
+     !    where sc = 1 and hc = i*1e3 so that the padded eigenpairs are decoupled and sorted last
+     IF ( n_active > 0 ) THEN
+        !$acc parallel loop collapse(3) async(async_id) present(hc, sc, hc_comp_itr, sc_comp_itr, par, slot2batch)
+        DO n = 1, n_active
+           DO j = 1, nbase_max
+              DO i = 1, nbase_max
+                 IF ( i <= par(ip_nbase,slot2batch(n)) .AND. j <= par(ip_nbase,slot2batch(n)) ) THEN
+                    hc_comp_itr(i,j,n) = hc(i,j,slot2batch(n))
+                    sc_comp_itr(i,j,n) = sc(i,j,slot2batch(n))
+                 ELSE IF ( i == j ) THEN
+                    hc_comp_itr(i,j,n) = CMPLX( REAL(i,DP)*1.D3, 0.D0, kind=DP )
+                    sc_comp_itr(i,j,n) = CMPLX( 1.D0, 0.D0, kind=DP )
+                 ELSE
+                    hc_comp_itr(i,j,n) = CMPLX( 0.D0, 0.D0, kind=DP )
+                    sc_comp_itr(i,j,n) = CMPLX( 0.D0, 0.D0, kind=DP )
+                 END IF
+              END DO
            END DO
         END DO
-     END DO
+     END IF
      !
      CALL start_clock( 'cegterg:diag' )
      IF ( n_active > 0 ) THEN
@@ -761,15 +761,18 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         !$acc update self(conv_comp(1:nvec,1:n_k))
      END IF
      !
-     ! We retrieve data:
-     DO ib = 1, n_k
-        IF ( my_done(ib) .OR. done_comp(ib) ) CYCLE
-        my_slot = 1 + COUNT(.NOT. done_comp(1:ib-1))
-        !$acc kernels async(async_id)
-        vc(1:nbase_max,1:nbase_max,ib) = vc_comp_itr(1:nbase_max,1:nbase_max,my_slot)
-        ew(1:nbase_max,ib)        = ew_comp_itr(1:nbase_max,my_slot)
-        !$acc end kernels
-     END DO
+     ! We retrieve data (all the slots in one kernel):
+     IF ( n_active > 0 ) THEN
+        !$acc parallel loop collapse(3) async(async_id) present(vc, ew, vc_comp_itr, ew_comp_itr, slot2batch)
+        DO n = 1, n_active
+           DO j = 1, nbase_max
+              DO i = 1, nbase_max
+                 vc(i,j,slot2batch(n)) = vc_comp_itr(i,j,n)
+                 IF ( j == 1 ) ew(i,slot2batch(n)) = ew_comp_itr(i,n)
+              END DO
+           END DO
+        END DO
+     END IF
      CALL nvtxRangePop()
      CALL stop_clock( 'cegterg:diag' )
      !
@@ -780,9 +783,12 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         IF ( my_done(ib) ) CYCLE
         conv(1:nvec,ib) = ( conv_comp(1:nvec,ib) == 1 )
         notcnv(ib) = COUNT( .NOT. conv(:,ib) )
-        !$acc kernels async(async_id)
-        e(1:nvec,ib) = ew(1:nvec,ib)
-        !$acc end kernels
+     END DO
+     !$acc parallel loop collapse(2) async(async_id) present(e, ew, par)
+     DO ib = 1, n_k
+        DO i = 1, nvec
+           IF ( par(ip_act,ib) == 1 ) e(i,ib) = ew(i,ib)
+        END DO
      END DO
      !
      ! ... if overall convergence has been achieved, or the dimension of
