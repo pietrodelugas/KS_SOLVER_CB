@@ -96,7 +96,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   !$acc declare device_resident(hc, sc, vc, vc_tmp)
     ! Hamiltonian, S matrix and eigenvectors on the reduced basis, per k-point
   LOGICAL :: restart_now(n_k)
-  INTEGER :: src_idx(nvec,n_k) ! unconverged roots, in order, for the reordering of vc
+  INTEGER, ALLOCATABLE :: src_idx(:,:) ! unconverged roots, in order, for the reordering of vc (host and device copy)
   INTEGER, ALLOCATABLE :: par(:,:)
     ! per k-point integer parameters, host and device copy, updated with one transfer: the kernels that run over all the
     ! k-points of the group in one launch read them (1 nbase, 2 nb1, 3 notcnv, 4 npw, 5 active = not converged yet)
@@ -204,9 +204,10 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   ALLOCATE( ew( nvecx, n_k ), STAT=ierr )
   IF( ierr /= 0 ) CALL errore( ' cegterg ',' cannot allocate ew ', ABS(ierr) )
   !$acc enter data create(ew) async(async_id)
-  ALLOCATE( par(5,n_k) )
+  ALLOCATE( par(5,n_k), src_idx(nvec,n_k) )
   par = 0
-  !$acc enter data create(par) async(async_id)
+  src_idx = 0
+  !$acc enter data create(par, src_idx) async(async_id)
   !
   ! work arrays shared by the k-points (device only)
   ALLOCATE( psi_fft_comp(npwx*npol,nvecx,n_k), hpsi_fft_comp(npwx*npol,nvecx,n_k) )
@@ -385,21 +386,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
               src_idx(np,ib) = n
            END IF
         END DO
-        IF ( np > 0 ) THEN
-           !$acc parallel loop collapse(2) async(async_id) copyin(src_idx(1:np,ib))
-           DO j = 1, np
-              DO i = 1, nvecx
-                 vc_tmp(i,j,ib) = vc(i,src_idx(j,ib),ib)
-              END DO
-           END DO
-           !$acc parallel loop collapse(2) async(async_id) copyin(src_idx(1:np,ib))
-           DO j = 1, np
-              DO i = 1, nvecx
-                 vc(i,j,ib) = vc_tmp(i,j,ib)
-                 IF ( i == 1 ) ew(nbase(ib)+j,ib) = e(src_idx(j,ib),ib)
-              END DO
-           END DO
-        END IF
         !
         nb1(ib) = nbase(ib) + 1
         !
@@ -407,7 +393,6 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         !
         my_n(ib) = nbase(ib)
      END DO
-     !
      DO ib = 1, n_k
         par(ip_nbase,ib) = nbase(ib)
         par(ip_nb1,ib) = nb1(ib)
@@ -415,7 +400,29 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         par(ip_npw,ib) = npw(ib)
         par(ip_act,ib) = MERGE( 0, 1, my_done(ib) )
      END DO
-     !$acc update device(par)
+     !$acc update device(par, src_idx)
+     !
+     ! the reordering of all the active k-points: two kernels in total (np of a k-point is notcnv of that k-point)
+     !$acc parallel loop collapse(3) async(async_id) present(vc, vc_tmp, src_idx, par)
+     DO ib = 1, n_k
+        DO j = 1, nvec
+           DO i = 1, nvecx
+              IF ( par(ip_act,ib) == 1 .AND. j <= par(ip_notcnv,ib) ) vc_tmp(i,j,ib) = vc(i,src_idx(j,ib),ib)
+           END DO
+        END DO
+     END DO
+     !$acc parallel loop collapse(3) async(async_id) present(vc, vc_tmp, ew, e, src_idx, par)
+     DO ib = 1, n_k
+        DO j = 1, nvec
+           DO i = 1, nvecx
+              IF ( par(ip_act,ib) == 1 .AND. j <= par(ip_notcnv,ib) ) THEN
+                 vc(i,j,ib) = vc_tmp(i,j,ib)
+                 IF ( i == 1 ) ew(par(ip_nbase,ib)+j,ib) = e(src_idx(j,ib),ib)
+              END IF
+           END DO
+        END DO
+     END DO
+     !
      n_active_zgem = COUNT(.NOT. done_comp(1:n_k))
      DO ib = 1, n_k
         IF ( .NOT. my_done(ib) ) THEN
@@ -874,8 +881,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   DEALLOCATE( hc_comp, sc_comp, vc_comp, ew_comp )
   DEALLOCATE( ptr_psi, ptr_psi_result, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_hc, ptr_sc, ptr_vc )
   !
-  !$acc exit data delete(ew, par) async(async_id)
-  DEALLOCATE( ew, par )
+  !$acc exit data delete(ew, par, src_idx) async(async_id)
+  DEALLOCATE( ew, par, src_idx )
   DEALLOCATE( vc )
   DEALLOCATE( vc_tmp )
   DEALLOCATE( hc )
