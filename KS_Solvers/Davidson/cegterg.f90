@@ -97,6 +97,11 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
     ! Hamiltonian, S matrix and eigenvectors on the reduced basis, per k-point
   LOGICAL :: restart_now(n_k)
   INTEGER :: src_idx(nvec,n_k) ! unconverged roots, in order, for the reordering of vc
+  INTEGER, ALLOCATABLE :: par(:,:)
+    ! per k-point integer parameters, host and device copy, updated with one transfer: the kernels that run over all the
+    ! k-points of the group in one launch read them (1 nbase, 2 nb1, 3 notcnv, 4 npw, 5 active = not converged yet)
+  INTEGER, PARAMETER :: ip_nbase = 1, ip_nb1 = 2, ip_notcnv = 3, ip_npw = 4, ip_act = 5
+  INTEGER :: ibb, jj, kk, ii, ntail, jmax
   INTEGER :: nb_slot_max, col
   REAL(DP) :: thr_conv
   REAL(DP) :: nrm
@@ -199,6 +204,9 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   ALLOCATE( ew( nvecx, n_k ), STAT=ierr )
   IF( ierr /= 0 ) CALL errore( ' cegterg ',' cannot allocate ew ', ABS(ierr) )
   !$acc enter data create(ew) async(async_id)
+  ALLOCATE( par(5,n_k) )
+  par = 0
+  !$acc enter data create(par) async(async_id)
   !
   ! work arrays shared by the k-points (device only)
   ALLOCATE( psi_fft_comp(npwx*npol,nvecx,n_k), hpsi_fft_comp(npwx*npol,nvecx,n_k) )
@@ -400,6 +408,14 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         my_n(ib) = nbase(ib)
      END DO
      !
+     DO ib = 1, n_k
+        par(ip_nbase,ib) = nbase(ib)
+        par(ip_nb1,ib) = nb1(ib)
+        par(ip_notcnv,ib) = notcnv(ib)
+        par(ip_npw,ib) = npw(ib)
+        par(ip_act,ib) = MERGE( 0, 1, my_done(ib) )
+     END DO
+     !$acc update device(par)
      n_active_zgem = COUNT(.NOT. done_comp(1:n_k))
      DO ib = 1, n_k
         IF ( .NOT. my_done(ib) ) THEN
@@ -503,17 +519,31 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      CALL start_clock( 'cegterg:h_psi_ptr iter' )
      !
      n_active = COUNT(.NOT. done_comp(1:n_k))
+     ! slot tables on the host (one transfer), then one kernel for the copies of all the active slots
+     n_slot = 0
      DO ib = 1, n_k
         IF ( my_done(ib) ) CYCLE
-        my_slot = 1 + COUNT(.NOT. done_comp(1:ib-1))
-        !$acc kernels async(async_id)
-        psi_fft_comp(:,:,my_slot) = psi(1:(npwx*npol), 1:nvecx, ib)
-        hpsi_fft_comp(:,:,my_slot) = hpsi(1:(npwx*npol), 1:nvecx, ib)
-        eig_new_comp(1:notcnv(ib),my_slot) = ew(nb1(ib):nb1(ib)+notcnv(ib)-1,ib)
-        npw_comp(my_slot) = npw(ib)
-        nb1_comp(my_slot) = nb1(ib)
-        slot2batch(my_slot)  = ib
-        !$acc end kernels
+        n_slot = n_slot + 1
+        npw_comp(n_slot) = npw(ib)
+        nb1_comp(n_slot) = nb1(ib)
+        slot2batch(n_slot) = ib
+     END DO
+     !$acc update device(npw_comp(1:n_active), nb1_comp(1:n_active), slot2batch(1:n_active))
+     nb_slot_max = MAXVAL( notcnv(1:n_k), MASK=.NOT. my_done(1:n_k) )
+     !$acc parallel loop collapse(3) async(async_id) present(psi_fft_comp, hpsi_fft_comp, psi, hpsi, slot2batch)
+     DO n = 1, n_active
+        DO j = 1, nvecx
+           DO k = 1, npwx*npol
+              psi_fft_comp(k,j,n) = psi(k,j,slot2batch(n))
+              hpsi_fft_comp(k,j,n) = hpsi(k,j,slot2batch(n))
+           END DO
+        END DO
+     END DO
+     !$acc parallel loop collapse(2) async(async_id) present(eig_new_comp, ew, par, slot2batch)
+     DO n = 1, n_active
+        DO i = 1, nb_slot_max
+           IF ( i <= par(ip_notcnv,slot2batch(n)) ) eig_new_comp(i,n) = ew(par(ip_nb1,slot2batch(n))+i-1,slot2batch(n))
+        END DO
      END DO
      !
      ! notcnv_comp is indexed by batch on the host, while h_psi_ptr_iter works with
@@ -557,13 +587,16 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      CALL stop_clock( 'cegterg:h_psi_ptr iter' )
      !
      DO ib = 1, n_k
-        IF ( my_done(ib) ) CYCLE
-        my_slot = 1 + COUNT(.NOT. done_comp(1:ib-1))
-        nhpsi(ib) = nhpsi(ib) + notcnv(ib)
-        !$acc kernels async(async_id)
-        hpsi(:,1:nvecx,ib) = hpsi_fft_comp(1:(npwx*npol),1:nvecx,my_slot)
-        psi(:,1:nvecx,ib) = psi_fft_comp(1:(npwx*npol),1:nvecx,my_slot)
-        !$acc end kernels
+        IF ( .NOT. my_done(ib) ) nhpsi(ib) = nhpsi(ib) + notcnv(ib)
+     END DO
+     !$acc parallel loop collapse(3) async(async_id) present(psi_fft_comp, hpsi_fft_comp, psi, hpsi, slot2batch)
+     DO n = 1, n_active
+        DO j = 1, nvecx
+           DO k = 1, npwx*npol
+              hpsi(k,j,slot2batch(n)) = hpsi_fft_comp(k,j,n)
+              psi(k,j,slot2batch(n)) = psi_fft_comp(k,j,n)
+           END DO
+        END DO
      END DO
      !
      DO ib = 1, n_k
@@ -841,8 +874,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   DEALLOCATE( hc_comp, sc_comp, vc_comp, ew_comp )
   DEALLOCATE( ptr_psi, ptr_psi_result, ptr_hpsi, ptr_hpsi_nb1, ptr_spsi, ptr_hc, ptr_sc, ptr_vc )
   !
-  !$acc exit data delete(ew) async(async_id)
-  DEALLOCATE( ew )
+  !$acc exit data delete(ew, par) async(async_id)
+  DEALLOCATE( ew, par )
   DEALLOCATE( vc )
   DEALLOCATE( vc_tmp )
   DEALLOCATE( hc )
