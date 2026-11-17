@@ -2,6 +2,7 @@ set(src_devmem
    device_memcpy.f90
    device_memcpy_mod.f90
    device_memset_async.f90
+   device_blas_scalars.f90
    dxlib_errore.f90)
 
 qe_enable_cuda_fortran("${src_devmem}")

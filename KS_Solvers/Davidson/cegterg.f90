@@ -19,7 +19,6 @@
 
 MODULE cegterg_mod
   IMPLICIT NONE
-  
   CONTAINS
 !----------------------------------------------------------------------------
 SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_psi_ptr_iter, &
@@ -43,6 +42,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   use cudafor
 #endif
   USE nvtx
+  USE device_blas_scalars_m, ONLY : blas_cone, blas_czero, device_blas_scalars_init
   USE util_param,    ONLY : DP
   USE mp_bands_util, ONLY : intra_bgrp_comm, inter_bgrp_comm, root_bgrp_id,&
                             nbgrp, my_bgrp_id, me_bgrp, root_bgrp
@@ -259,6 +259,7 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   !
   CALL start_clock( 'cegterg:init' )
   !
+  CALL device_blas_scalars_init()
   kdim_max = MAXVAL(kdim(1:n_k))
   DO ib = 1, n_k
      ptr_hc(ib) = c_devloc(hc(1,1,ib))
@@ -271,22 +272,22 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   CALL start_clock('First Zgemm call init')
   !$acc update device(ptr_psi, ptr_hpsi, ptr_hc)
   !$acc host_data use_device(ptr_psi, ptr_hpsi, ptr_hc)
-  info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, nvec, nvec, kdim_max, ONE, &
-                            ptr_psi, kdmx, ptr_hpsi, kdmx, ZERO, ptr_hc, nvecx_pad, n_k)
+  info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, nvec, nvec, kdim_max, blas_cone, &
+                            ptr_psi, kdmx, ptr_hpsi, kdmx, blas_czero, ptr_hc, nvecx_pad, n_k)
   !$acc end host_data
   CALL stop_clock('First Zgemm call init')
   CALL start_clock('Second Zgemm call init')
   IF ( uspp ) THEN
      !$acc update device(ptr_psi, ptr_spsi, ptr_sc)
      !$acc host_data use_device(ptr_psi, ptr_spsi, ptr_sc)
-     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, nvec, nvec, kdim_max, ONE, &
-                               ptr_psi, kdmx, ptr_spsi, kdmx, ZERO, ptr_sc, nvecx_pad, n_k)
+     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, nvec, nvec, kdim_max, blas_cone, &
+                               ptr_psi, kdmx, ptr_spsi, kdmx, blas_czero, ptr_sc, nvecx_pad, n_k)
      !$acc end host_data
   ELSE
      !$acc update device(ptr_psi, ptr_psi_result, ptr_sc)
      !$acc host_data use_device(ptr_psi, ptr_psi_result, ptr_sc)
-     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, nvec, nvec, kdim_max, ONE, &
-                               ptr_psi, kdmx, ptr_psi_result, kdmx, ZERO, ptr_sc, nvecx_pad, n_k)
+     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, nvec, nvec, kdim_max, blas_cone, &
+                               ptr_psi, kdmx, ptr_psi_result, kdmx, blas_czero, ptr_sc, nvecx_pad, n_k)
      !$acc end host_data
   END IF
   CALL stop_clock('Second Zgemm call init')
@@ -443,14 +444,14 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      IF ( uspp ) THEN
         !$acc update device(ptr_vc, ptr_psi, ptr_spsi, ptr_psi_result)
         !$acc host_data use_device(ptr_psi_result, ptr_spsi, ptr_vc)
-        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
-                                  ptr_spsi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
+        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, blas_cone, &
+                                  ptr_spsi, kdmx, ptr_vc, nvecx, blas_czero, ptr_psi_result, kdmx, n_active_zgem)
         !$acc end host_data
      ELSE
         !$acc update device(ptr_vc, ptr_psi, ptr_psi_result)
         !$acc host_data use_device(ptr_psi, ptr_psi_result, ptr_vc)
-        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
-                                  ptr_psi, kdmx, ptr_vc, nvecx, ZERO, ptr_psi_result, kdmx, n_active_zgem)
+        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, blas_cone, &
+                                  ptr_psi, kdmx, ptr_vc, nvecx, blas_czero, ptr_psi_result, kdmx, n_active_zgem)
         !$acc end host_data
      END IF
      !
@@ -471,8 +472,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      !
      !$acc update device(ptr_hpsi, ptr_psi_result)
      !$acc host_data use_device(ptr_hpsi, ptr_vc, ptr_psi_result)
-     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, ONE, &
-                               ptr_hpsi, kdmx, ptr_vc, nvecx, ONE, ptr_psi_result, kdmx, n_active_zgem)
+     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_N, CUBLAS_OP_N, kdim_max, notcnv_max, my_n_max, blas_cone, &
+                               ptr_hpsi, kdmx, ptr_vc, nvecx, blas_cone, ptr_psi_result, kdmx, n_active_zgem)
      !$acc end host_data
      !
      DO ib = 1, n_k
@@ -587,8 +588,8 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      !
      !$acc update device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
      !$acc host_data use_device(ptr_hpsi_nb1, ptr_psi, ptr_hc)
-     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, ZERO, ptr_hc, nvecx_pad, n_active_zgem)
+     info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, blas_cone, &
+                               ptr_hpsi_nb1, kdmx, ptr_psi, kdmx, blas_czero, ptr_hc, nvecx_pad, n_active_zgem)
      !$acc end host_data
      !
      ! The pointers to the matrices are re-assigned (as the dimensions changed)
@@ -605,14 +606,14 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      IF ( uspp ) THEN
         !$acc update device(ptr_spsi, ptr_psi, ptr_sc)
         !$acc host_data use_device(ptr_spsi, ptr_psi, ptr_sc)
-        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                                  ptr_spsi, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
+        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, blas_cone, &
+                                  ptr_spsi, kdmx, ptr_psi, kdmx, blas_czero, ptr_sc, nvecx_pad, n_active_zgem)
         !$acc end host_data
      ELSE
         !$acc update device(ptr_psi_result, ptr_psi, ptr_sc)
         !$acc host_data use_device(ptr_psi_result, ptr_psi, ptr_sc)
-        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, ONE, &
-                                  ptr_psi_result, kdmx, ptr_psi, kdmx, ZERO, ptr_sc, nvecx_pad, n_active_zgem)
+        info = cublasZgemmBatched(cublas_handle(async_id), CUBLAS_OP_C, CUBLAS_OP_N, notcnv_max, my_n_max, kdim_max, blas_cone, &
+                                  ptr_psi_result, kdmx, ptr_psi, kdmx, blas_czero, ptr_sc, nvecx_pad, n_active_zgem)
         !$acc end host_data
      END IF
      !
