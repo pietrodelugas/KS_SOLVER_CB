@@ -440,14 +440,16 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      ! ... batches), but a batch only has my_n valid basis vectors (e.g. right after a
      ! ... restart, when another batch still has a larger basis). The contribution of the
      ! ... extra rows of vc must vanish: zero them (the stale values there are not zero).
-     DO ib = 1, n_k
-        IF ( my_done(ib) ) CYCLE
-        IF ( my_n_max > my_n(ib) ) THEN
-           !$acc kernels async(async_id) present(vc)
-           vc(my_n(ib)+1:my_n_max, 1:notcnv_max, ib) = ZERO
-           !$acc end kernels
-        END IF
-     END DO
+     IF ( n_active_zgem > 0 ) THEN
+        !$acc parallel loop collapse(3) async(async_id) present(vc, par)
+        DO ib = 1, n_k
+           DO j = 1, notcnv_max
+              DO i = 1, my_n_max
+                 IF ( par(ip_act,ib) == 1 .AND. i > par(ip_nbase,ib) ) vc(i,j,ib) = ZERO
+              END DO
+           END DO
+        END DO
+     END IF
      !
      ! pointers of the active slots
      DO ib = 1, n_k
@@ -478,20 +480,21 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
         !$acc end host_data
      END IF
      !
-     DO ib = 1, n_k
-        IF ( my_done(ib) ) CYCLE
-        !
-        ! NB: no mp_sum over inter_bgrp_comm here (band groups are not supported)
-        !$acc parallel loop collapse(3) async(async_id)
-        DO np = 1, notcnv(ib)
-           DO ipol = 1, npol
-              DO k = 1, npwx
-                 psi(k + (ipol-1)*npwx, nbase(ib)+np, ib) = - ew(nbase(ib)+np,ib)*psi(k + (ipol-1)*npwx, nbase(ib)+np, ib)
+     ! NB: no mp_sum over inter_bgrp_comm here (band groups are not supported)
+     IF ( n_active_zgem > 0 ) THEN
+        !$acc parallel loop collapse(4) async(async_id) present(psi, ew, par)
+        DO ib = 1, n_k
+           DO np = 1, notcnv_max
+              DO ipol = 1, npol
+                 DO k = 1, npwx
+                    IF ( par(ip_act,ib) == 1 .AND. np <= par(ip_notcnv,ib) ) &
+                       psi(k + (ipol-1)*npwx, par(ip_nbase,ib)+np, ib) = &
+                          - ew(par(ip_nbase,ib)+np,ib)*psi(k + (ipol-1)*npwx, par(ip_nbase,ib)+np, ib)
+                 END DO
               END DO
            END DO
         END DO
-        !$acc end parallel
-     END DO
+     END IF
      !
      !$acc update device(ptr_hpsi, ptr_psi_result)
      !$acc host_data use_device(ptr_hpsi, ptr_vc, ptr_psi_result)
@@ -499,26 +502,23 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
                                ptr_hpsi, kdmx, ptr_vc, nvecx, blas_cone, ptr_psi_result, kdmx, n_active_zgem)
      !$acc end host_data
      !
-     DO ib = 1, n_k
-        IF ( my_done(ib) ) CYCLE
-        ! clean up garbage if there is any
-        IF ( npw(ib) < npwx ) THEN
-           !$acc parallel loop collapse(2) async(async_id)
-           DO j = nb1(ib), nbase(ib)+notcnv(ib)
-              DO k = npw(ib)+1, npwx
-                 psi(k,j,ib) = ZERO
+     ! clean up garbage if there is any (the part of every vector beyond its npw, for each polarisation)
+     IF ( n_active_zgem > 0 ) THEN
+        ntail = MINVAL( npw(1:n_k), MASK=.NOT. my_done(1:n_k) )
+        IF ( ntail < npwx ) THEN
+           !$acc parallel loop collapse(4) async(async_id) present(psi, par)
+           DO ib = 1, n_k
+              DO j = 1, notcnv_max
+                 DO ipol = 1, npol
+                    DO k = ntail+1, npwx
+                       IF ( par(ip_act,ib) == 1 .AND. j <= par(ip_notcnv,ib) .AND. k > par(ip_npw,ib) ) &
+                          psi(k+(ipol-1)*npwx, par(ip_nb1,ib)+j-1, ib) = ZERO
+                    END DO
+                 END DO
               END DO
            END DO
         END IF
-        IF ( npol == 2 ) THEN
-           !$acc parallel loop collapse(2) async(async_id)
-           DO j = nb1(ib), nbase(ib)+notcnv(ib)
-              DO k = npwx+npw(ib)+1, 2*npwx
-                 psi(k,j,ib) = ZERO
-              END DO
-           END DO
-        END IF
-     END DO
+     END IF
      CALL stop_clock( 'cegterg:update' )
      !
      ! ... approximate inverse iteration (g_psi) and the hpsi and spsi of the new functions
