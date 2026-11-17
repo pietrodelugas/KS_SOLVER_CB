@@ -301,21 +301,22 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
   END IF
   CALL stop_clock('Second Zgemm call init')
   !
+  ! the diagonal of hc and sc must be strictly real; the lower triangle is copied to the upper one (all k-points, one kernel;
+  ! nbase = nvec for every k-point here)
+  !$acc parallel vector_length(64) async(async_id) present(hc, sc)
+  !$acc loop gang collapse(2)
   DO ib = 1, n_k
-     !$acc parallel vector_length(64) async(async_id)
-     !$acc loop gang
-     DO n = 1, nbase(ib)
-        ! ... the diagonal of hc and sc must be strictly real
+     DO n = 1, nvec
         hc(n,n,ib) = CMPLX( REAL( hc(n,n,ib) ), 0.D0 ,kind=DP)
         sc(n,n,ib) = CMPLX( REAL( sc(n,n,ib) ), 0.D0 ,kind=DP)
         !$acc loop vector
-        DO m = n + 1, nbase(ib)
+        DO m = n + 1, nvec
            hc(n,m,ib) = CONJG( hc(m,n,ib) )
            sc(n,m,ib) = CONJG( sc(m,n,ib) )
         END DO
      END DO
-     !$acc end parallel
   END DO
+  !$acc end parallel
   !
   CALL stop_clock( 'cegterg:init' )
   !
