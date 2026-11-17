@@ -661,26 +661,34 @@ SUBROUTINE cegterg( h_psi_ptr, s_psi_ptr,  uspp, g_psi_ptr, h_psi_ptr_iter, g_ps
      DO ib = 1, n_k
         IF ( my_done(ib) ) CYCLE
         nbase(ib) = nbase(ib) + notcnv(ib)
-        !
-        !$acc parallel vector_length(64) async(async_id)
-        !$acc loop gang
-        DO n = 1, nbase(ib)
-           ! ... the diagonal of hc and sc must be strictly real
-           IF( n>=nb1(ib) ) THEN
-              hc(n,n,ib) = CMPLX( REAL( hc(n,n,ib) ), 0.D0 ,kind=DP)
-              sc(n,n,ib) = CMPLX( REAL( sc(n,n,ib) ), 0.D0 ,kind=DP)
-           ENDIF
-           !$acc loop vector
-           DO m = MAX(n+1,nb1(ib)), nbase(ib)
-              hc(n,m,ib) = CONJG( hc(m,n,ib) )
-              sc(n,m,ib) = CONJG( sc(m,n,ib) )
-           END DO
-        END DO
-        !$acc end parallel
-        !
+        par(ip_nbase,ib) = nbase(ib)
         ! The current nbase is stored only if the convergence has not been reached
         IF ( .NOT. done_comp(ib) ) nbase_comp(ib) = nbase(ib)
      END DO
+     !$acc update device(par)
+     IF ( n_active_zgem > 0 ) THEN
+        jmax = MAXVAL( nbase(1:n_k), MASK=.NOT. my_done(1:n_k) )
+        ! symmetrise hc and sc of all the active k-points in one kernel (a gang for every (k-point, row))
+        !$acc parallel vector_length(64) async(async_id) present(hc, sc, par)
+        !$acc loop gang collapse(2)
+        DO ib = 1, n_k
+           DO n = 1, jmax
+              IF ( par(ip_act,ib) == 1 .AND. n <= par(ip_nbase,ib) ) THEN
+                 ! ... the diagonal of hc and sc must be strictly real
+                 IF ( n >= par(ip_nb1,ib) ) THEN
+                    hc(n,n,ib) = CMPLX( REAL( hc(n,n,ib) ), 0.D0 ,kind=DP)
+                    sc(n,n,ib) = CMPLX( REAL( sc(n,n,ib) ), 0.D0 ,kind=DP)
+                 END IF
+                 !$acc loop vector
+                 DO m = MAX(n+1,par(ip_nb1,ib)), par(ip_nbase,ib)
+                    hc(n,m,ib) = CONJG( hc(m,n,ib) )
+                    sc(n,m,ib) = CONJG( sc(m,n,ib) )
+                 END DO
+              END IF
+           END DO
+        END DO
+        !$acc end parallel
+     END IF
      !
      ! ... diagonalize the reduced hamiltonian (all the active slots with one batched call)
      !
